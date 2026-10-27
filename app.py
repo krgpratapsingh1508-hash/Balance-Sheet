@@ -1329,6 +1329,17 @@ def edit_income():
     delete_block("income", rid, "inc")
 
 
+def loan_total_note(loan):
+    """Show instalments due + penalty = total outstanding for a loan (penalty is recalculated live)."""
+    pays = loan_pay_df()
+    inf = loan_summary(dict(loan), pays[pays["loan_id"] == int(loan["id"])], date.today())
+    st.info(
+        f"Instalments due {inr(inf['pending'])} + penalty due {inr(inf['pen_due'])} "
+        f"= total outstanding {inr(inf['pending'] + inf['pen_due'])}  \n"
+        f"Penalty accrued so far {inr(inf['pen_total'])}, penalty paid {inr(inf['pen_paid'])}."
+    )
+
+
 def edit_loans():
     df = loans_df()
     if df.empty:
@@ -1337,6 +1348,7 @@ def edit_loans():
     labels = {int(r["id"]): f"{r['name']} | {inr(r['kist_amount'])} × {int(r['total_kists'])}" for _, r in df.iterrows()}
     rid = st.selectbox("Select loan", list(labels), format_func=labels.get, key="edit_loan_pick")
     r = df[df["id"] == rid].iloc[0]
+    loan_total_note(r)
     ptypes = list(LOAN_PEN_TYPES)
     with st.form(f"edit_loan_{rid}"):
         name = st.text_input("Loan name", value=r["name"])
@@ -1391,6 +1403,8 @@ def edit_loan_payments():
     loan_ids = {row["name"]: int(row["id"]) for row in loans.to_dict("records")}
     names = list(loan_ids)
     kinds = ["kist", "penalty"]
+    if r["loan"] in names:
+        loan_total_note(loans[loans["id"] == r["loan_id"]].iloc[0])
     with st.form(f"edit_pay_{rid}"):
         loan = st.selectbox("Loan", names, index=names.index(r["loan"]) if r["loan"] in names else 0)
         kind = st.radio(
