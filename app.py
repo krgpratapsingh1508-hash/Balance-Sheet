@@ -1306,8 +1306,17 @@ def edit_txns():
     rid = st.selectbox("Select entry", list(labels), format_func=labels.get, key="edit_txn_pick")
     r = df[df["id"] == rid].iloc[0]
     kinds = list(KINDS)
+    cur_phone = ""
+    prow = query_df("SELECT phone FROM parties WHERE id = ?", (int(r["party_id"]),))
+    if not prow.empty:
+        cur_phone = (prow.iloc[0]["phone"] or "").strip()
     with st.form(f"edit_txn_{rid}"):
         name = st.text_input("Party name (change it to move this entry to another party)", value=r["party"])
+        phone = st.text_input(
+            "Phone (required)", value=cur_phone, placeholder="98xxxxxx10",
+            help="Is party ka number. Yahan badloge to party ka number update ho jayega. "
+                 "Agar entry kisi doosri saved party me move karte ho to uska saved number hi use hoga.",
+        )
         kind = st.selectbox("Transaction type", kinds, index=kinds.index(r["kind"]) if r["kind"] in kinds else 0)
         a, b = st.columns(2)
         amount = a.number_input("Amount (₹)", min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
@@ -1315,12 +1324,20 @@ def edit_txns():
         note = st.text_input("Note (optional)", value=r["note"] or "")
         ok = st.form_submit_button("Save changes", type="primary", use_container_width=True)
     if ok:
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        target = query_df("SELECT id, phone FROM parties WHERE name = ?", (name.strip(),))
+        target_phone = (target.iloc[0]["phone"] or "").strip() if not target.empty else ""
+        moving_to_saved = (not target.empty) and int(target.iloc[0]["id"]) != int(r["party_id"]) and target_phone
         if not name.strip():
             st.error("Party name cannot be empty.")
+        elif not moving_to_saved and len(digits) < 10:
+            st.error("Phone number is required (at least 10 digits).")
         elif amount <= 0:
             st.error("Amount must be greater than 0.")
         else:
-            pid = get_or_create_party(name)
+            pid = get_or_create_party(name, phone.strip())
+            if not moving_to_saved:
+                run("UPDATE parties SET phone = ? WHERE id = ?", (phone.strip(), pid))
             run(
                 "UPDATE txns SET party_id=?, tdate=?, kind=?, amount=?, note=? WHERE id=?",
                 (pid, tdate.isoformat(), kind, float(amount), note.strip(), int(rid)),
