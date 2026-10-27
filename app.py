@@ -396,12 +396,15 @@ def page_dashboard():
 
 
 def income_form():
+    # form ke bahar, taaki 'Other' chunte hi neeche naam likhne ka box turant aa jaye
+    source = st.selectbox("Kahan se", INCOME_SOURCES, key="inc_source")
+    other = ""
+    if source == "Other":
+        other = st.text_input("Other ka naam likhiye", placeholder="jaise: Tuition / Freelance", key="inc_other")
     with st.form("income_form", clear_on_submit=True):
-        a, b, c = st.columns(3)
+        a, b = st.columns(2)
         amount = a.number_input("Income (₹)", min_value=0.0, step=500.0, format="%.2f")
         idate = b.date_input("Kis tarikh ko mili", value=date.today())
-        source = c.selectbox("Kahan se", INCOME_SOURCES)
-        other = st.text_input("Agar 'Other' chuna to yahan likhiye", placeholder="jaise: Tuition / Freelance")
         note = st.text_input("Note (optional)", placeholder="jaise: overtime / commission")
         ok = st.form_submit_button("💾 Income save karein", type="primary", use_container_width=True)
     if ok:
