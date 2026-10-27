@@ -36,8 +36,9 @@ P_DASH = "🏠  Dashboard"
 P_NEW = "➕  Nayi Entry"
 P_PARTY = "👤  Party Khata"
 P_ALL = "📋  Saari Entries"
+P_SAL = "💼  Salary"
 P_BACKUP = "💾  Backup / Restore"
-PAGES = [P_DASH, P_NEW, P_PARTY, P_ALL, P_BACKUP]
+PAGES = [P_DASH, P_NEW, P_PARTY, P_ALL, P_SAL, P_BACKUP]
 
 st.set_page_config(page_title="Udhari Khata", page_icon="📒", layout="wide")
 
@@ -194,9 +195,22 @@ def init_db():
                 amount REAL NOT NULL CHECK(amount > 0),
                 note TEXT DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS salary(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sdate TEXT NOT NULL,
+                amount REAL NOT NULL CHECK(amount > 0),
+                source TEXT DEFAULT '',
+                note TEXT DEFAULT ''
+            );
             """
         )
         c.commit()
+
+
+def salary_df():
+    df = query_df("SELECT id, sdate AS date, amount, source, note FROM salary ORDER BY sdate, id")
+    df["month"] = df["date"].str[:7]
+    return df
 
 
 def get_or_create_party(name, phone=""):
@@ -307,11 +321,17 @@ def page_dashboard():
     n_mil = int((s["balance"] > 0).sum())
     n_den = int((s["balance"] < 0).sum())
 
-    c1, c2, c3 = st.columns(3)
+    sal = salary_df()
+    this_month = sal.loc[sal["month"] == date.today().strftime("%Y-%m"), "amount"].sum()
+    c1, c2, c3, c4 = st.columns(4)
     c1.markdown(kpi("💰 Aapko milna hai", inr(milna), f"{n_mil} logon se", "g"), unsafe_allow_html=True)
     c2.markdown(kpi("🧾 Aapko dena hai", inr(dena), f"{n_den} logon ko", "r"), unsafe_allow_html=True)
     c3.markdown(
         kpi("⚖️ Net balance", inr(milna - dena), "milna − dena", "b"), unsafe_allow_html=True
+    )
+    c4.markdown(
+        kpi("💼 Is mahine ki salary", inr(this_month), date.today().strftime("%B %Y"), "b"),
+        unsafe_allow_html=True,
     )
     st.write("")
 
@@ -560,6 +580,94 @@ def page_all():
                        file_name="udhari_entries.csv", mime="text/csv", disabled=show.empty)
 
 
+def page_salary():
+    hero("💼 Salary", "Har mahine ki salary ka hisab, total aur chart")
+    with st.form("sal_form", clear_on_submit=True):
+        a, b, c = st.columns(3)
+        amount = a.number_input("Salary (₹)", min_value=0.0, step=500.0, format="%.2f")
+        sdate = b.date_input("Kis tarikh ko mili", value=date.today())
+        source = c.text_input("Kahan se (optional)", placeholder="jaise: Company / Dukaan")
+        note = st.text_input("Note (optional)", placeholder="jaise: bonus / overtime / advance kata")
+        ok = st.form_submit_button("💾 Salary save karein", type="primary", use_container_width=True)
+    if ok:
+        if amount <= 0:
+            st.error("Rakam 0 se zyada honi chahiye.")
+        else:
+            run(
+                "INSERT INTO salary(sdate, amount, source, note) VALUES (?,?,?,?)",
+                (sdate.isoformat(), float(amount), source.strip(), note.strip()),
+            )
+            st.toast("Salary save ho gayi", icon="✅")
+            st.rerun()
+
+    df = salary_df()
+    if df.empty:
+        st.info("Abhi koi salary entry nahi hai. Upar se pehli salary daaliye.")
+        return
+
+    today = date.today()
+    this_month = df.loc[df["month"] == today.strftime("%Y-%m"), "amount"].sum()
+    this_year = df.loc[df["month"].str[:4] == str(today.year), "amount"].sum()
+    monthly = df.groupby("month")["amount"].sum().reset_index()
+    avg = monthly["amount"].mean()
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.markdown(kpi("Is mahine", inr(this_month), today.strftime("%B %Y"), "g"), unsafe_allow_html=True)
+    k2.markdown(kpi("Is saal ki total", inr(this_year), str(today.year), "b"), unsafe_allow_html=True)
+    k3.markdown(kpi("Mahine ka average", inr(avg), f"{len(monthly)} mahine ke hisab se", "b"), unsafe_allow_html=True)
+    k4.markdown(kpi("Ab tak ki total", inr(df["amount"].sum()), f"{len(df)} entries", "g"), unsafe_allow_html=True)
+    st.write("")
+
+    st.subheader("Mahine-wise salary")
+    last12 = monthly.tail(12)
+    chart = (
+        alt.Chart(last12)
+        .mark_bar(cornerRadiusEnd=6, color=BLUE)
+        .encode(
+            x=alt.X("month:N", title=None, sort=None),
+            y=alt.Y("amount:Q", title="Rakam (₹)"),
+            tooltip=[alt.Tooltip("month:N", title="Mahina"), alt.Tooltip("amount:Q", title="Salary", format=",.2f")],
+        )
+        .properties(height=260)
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+    st.subheader("Saari salary entries")
+    view = df.rename(
+        columns={"id": "ID", "date": "Tarikh", "amount": "Rakam", "source": "Kahan se", "note": "Note"}
+    )[["ID", "Tarikh", "Rakam", "Kahan se", "Note"]]
+    st.dataframe(
+        view.iloc[::-1], use_container_width=True, hide_index=True,
+        column_config={"Rakam": st.column_config.NumberColumn(format="₹%.2f")},
+    )
+    st.download_button("⬇️ Salary CSV", view.to_csv(index=False).encode("utf-8"),
+                       file_name="salary.csv", mime="text/csv")
+
+    with st.expander("✏️ Salary entry badlein ya hataiye"):
+        labels = {int(r["id"]): f"{r['date']} · {inr(r['amount'])}" + (f" · {r['source']}" if r["source"] else "")
+                  for _, r in df.iterrows()}
+        sid = st.selectbox("Entry chuniye", list(labels.keys())[::-1], format_func=labels.get)
+        r = df[df["id"] == sid].iloc[0]
+        with st.form(f"sal_edit_{sid}"):
+            c1, c2 = st.columns(2)
+            amt = c1.number_input("Rakam (₹)", min_value=0.0, value=float(r["amount"]), step=500.0, format="%.2f")
+            sd = c2.date_input("Tarikh", value=date.fromisoformat(str(r["date"])))
+            src = st.text_input("Kahan se", value=r["source"] or "")
+            nt = st.text_input("Note", value=r["note"] or "")
+            save = st.form_submit_button("Badlav save karein", type="primary")
+        if save:
+            if amt <= 0:
+                st.error("Rakam 0 se zyada honi chahiye.")
+            else:
+                run("UPDATE salary SET sdate=?, amount=?, source=?, note=? WHERE id=?",
+                    (sd.isoformat(), float(amt), src.strip(), nt.strip(), int(sid)))
+                st.rerun()
+        sure = st.checkbox("Haan, ye entry delete karni hai", key=f"ssure_{sid}")
+        if st.button("🗑️ Delete karein", disabled=not sure, key=f"sdel_{sid}"):
+            run("DELETE FROM salary WHERE id = ?", (int(sid),))
+            st.rerun()
+
+
 def page_backup():
     hero("💾 Backup / Restore", "Apna data surakshit rakhiye")
     st.warning(
@@ -611,6 +719,36 @@ def page_backup():
                 added += 1
             st.success(f"{added} entries jodi gayi, {skipped} pehle se maujood thi (duplicate nahi banayi).")
 
+    st.divider()
+    s1, s2 = st.columns(2)
+    sal = salary_df()
+    with s1:
+        st.markdown("#### 💼 Salary backup")
+        st.caption(f"{len(sal)} salary entries")
+        st.download_button(
+            "Salary CSV backup", sal[["date", "amount", "source", "note"]].to_csv(index=False).encode("utf-8"),
+            file_name=f"salary_backup_{date.today().isoformat()}.csv", mime="text/csv", disabled=sal.empty,
+        )
+    with s2:
+        st.markdown("#### 💼 Salary restore")
+        sup = st.file_uploader("Salary CSV chuniye", type="csv", key="sal_up", label_visibility="collapsed")
+        if sup is not None and st.button("Salary restore karein"):
+            d = pd.read_csv(sup).fillna("")
+            if not {"date", "amount", "source", "note"}.issubset(d.columns):
+                st.error("CSV me ye columns hone chahiye: date, amount, source, note")
+                return
+            have = {(str(r.date), round(float(r.amount), 2), str(r.source), str(r.note)) for r in sal.itertuples()}
+            added = 0
+            for _, r in d.iterrows():
+                key = (str(r["date"]), round(float(r["amount"]), 2), str(r["source"]), str(r["note"]))
+                if key in have:
+                    continue
+                run("INSERT INTO salary(sdate, amount, source, note) VALUES (?,?,?,?)",
+                    (key[0], float(r["amount"]), key[2], key[3]))
+                have.add(key)
+                added += 1
+            st.success(f"{added} salary entries jodi gayi.")
+
 
 # ---------------------------------------------------------------- main
 def main():
@@ -635,6 +773,7 @@ def main():
         P_NEW: page_new_entry,
         P_PARTY: page_party,
         P_ALL: page_all,
+        P_SAL: page_salary,
         P_BACKUP: page_backup,
     }[st.session_state["page"]]()
 
