@@ -381,6 +381,93 @@ def party_card(r, key):
         )
 
 
+CF_COLS = ["Income", "Udhar diya", "Udhar wapas diya", "Kist", "Penalty", "Wapas mile", "Udhar liya"]
+CF_OUT = ["Udhar diya", "Udhar wapas diya", "Kist", "Penalty"]  # paisa gaya
+CF_IN = ["Income", "Wapas mile", "Udhar liya"]  # paisa aaya
+
+
+def cash_flow():
+    """Mahine-wise: income, kitna gaya (udhari/kist/penalty), kitna aur aaya aur kitna bacha."""
+    parts = []
+    inc = income_df()
+    if not inc.empty:
+        parts.append(pd.DataFrame({"month": inc["month"], "Income": inc["amount"]}))
+    t = txns_df()
+    if not t.empty:
+        amt, kind = t["amount"], t["kind"]
+        parts.append(pd.DataFrame({
+            "month": t["date"].str[:7],
+            "Udhar diya": amt.where(kind == "Maine udhar diya", 0.0),
+            "Udhar wapas diya": amt.where(kind == "Maine paise wapas diye", 0.0),
+            "Wapas mile": amt.where(kind == "Mujhe paise wapas mile", 0.0),
+            "Udhar liya": amt.where(kind == "Maine udhar liya", 0.0),
+        }))
+    p = loan_pay_df()
+    if not p.empty:
+        parts.append(pd.DataFrame({
+            "month": p["date"].str[:7],
+            "Kist": p["amount"].where(p["kind"] == "kist", 0.0),
+            "Penalty": p["amount"].where(p["kind"] == "penalty", 0.0),
+        }))
+    if not parts:
+        return pd.DataFrame(columns=CF_COLS + ["Gaya", "Aaya", "Bacha"], dtype=float)
+    cf = pd.concat(parts).fillna(0.0).groupby("month").sum().reindex(columns=CF_COLS, fill_value=0.0)
+    cf["Gaya"] = cf[CF_OUT].sum(axis=1)
+    cf["Aaya"] = cf[CF_IN].sum(axis=1)
+    cf["Bacha"] = cf["Aaya"] - cf["Gaya"]
+    return cf.sort_index()
+
+
+def cash_total():
+    cf = cash_flow()
+    return float(cf["Bacha"].sum()) if not cf.empty else 0.0
+
+
+def show_cash_left():
+    st.caption(f"👛 Income me se ab bacha: {inr(cash_total())}")
+
+
+def cash_section():
+    cf = cash_flow()
+    if cf.empty:
+        return
+    income = float(cf["Income"].sum())
+    gaya = float(cf["Gaya"].sum())
+    other_in = float((cf["Wapas mile"] + cf["Udhar liya"]).sum())
+    bacha = float(cf["Bacha"].sum())
+    st.subheader("👛 Income me se hisab")
+    k1, k2, k3 = st.columns(3)
+    k1.markdown(kpi("💵 Kul income", inr(income), "ab tak ki", "g"), unsafe_allow_html=True)
+    k2.markdown(
+        kpi("📤 Kul gaya", inr(gaya), "udhari diya, wapas diye, kist, penalty", "r"),
+        unsafe_allow_html=True,
+    )
+    k3.markdown(
+        kpi("👛 Income me se bacha", inr(bacha), f"income + {inr(other_in)} aur aaya − gaya",
+            "g" if bacha >= 0 else "r"),
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        f"Gaya: udhar diya {inr(cf['Udhar diya'].sum())} · udhar wapas diya {inr(cf['Udhar wapas diya'].sum())} · "
+        f"kist {inr(cf['Kist'].sum())} · penalty {inr(cf['Penalty'].sum())}. "
+        f"Aur aaya: paise wapas mile {inr(cf['Wapas mile'].sum())} · udhar liya {inr(cf['Udhar liya'].sum())}."
+    )
+    with st.expander("Mahine-wise hisab"):
+        tbl = pd.DataFrame({
+            "Income": cf["Income"],
+            "Aur aaya": cf["Wapas mile"] + cf["Udhar liya"],
+            "Gaya": cf["Gaya"],
+            "Bacha": cf["Bacha"],
+            "Ab tak bacha": cf["Bacha"].cumsum(),
+        }).iloc[::-1].reset_index().rename(columns={"month": "Mahina"})
+        money = st.column_config.NumberColumn(format="₹%.2f")
+        st.dataframe(
+            tbl, hide_index=True, use_container_width=True,
+            column_config={c: money for c in ["Income", "Aur aaya", "Gaya", "Bacha", "Ab tak bacha"]},
+        )
+    st.write("")
+
+
 def loan_section():
     loans = loans_df()
     if loans.empty:
@@ -482,6 +569,7 @@ def page_dashboard():
     )
     st.write("")
 
+    cash_section()
     loan_section()
 
     left, right = st.columns([1.35, 1])
@@ -589,6 +677,7 @@ def income_form():
             )
             st.success(f"✅ {inr(amount)} ki income save ho gayi.")
             st.toast("Income save ho gayi", icon="✅")
+            show_cash_left()
 
 
 def loan_entry_form():
@@ -672,6 +761,7 @@ def loan_entry_form():
             )
             st.success(f"✅ {pick}: {kind.lower()} {inr(amount)} save ho gayi.")
             st.toast("Save ho gaya", icon="✅")
+            show_cash_left()
 
 
 def page_new_entry():
@@ -720,6 +810,7 @@ def page_new_entry():
             )
             st.success(f"✅ {name} ke saath {inr(amount)} ki entry save ho gayi.")
             st.toast("Entry save ho gayi", icon="✅")
+            show_cash_left()
 
 
 SHEETS = ["Udhari", "Income", "Loan", "Kist_Penalty"]
