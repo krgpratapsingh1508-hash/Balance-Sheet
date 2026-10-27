@@ -834,22 +834,51 @@ def page_new_entry():
     options = ["-- New party --"] + parties["name"].tolist()
     idx = options.index(pre) if pre in options else 0
 
+    flash = st.session_state.pop("entry_flash", None)
+    if flash:
+        st.success(flash)
+        st.toast("Entry saved")
+        show_cash_left()
+
+    n = st.session_state.setdefault("entry_n", 0)
+
+    # Party + phone form ke bahar hain, taaki party badalte hi saved number turant dikhe
+    a, b = st.columns(2)
+    existing = a.selectbox("Existing party", options, index=idx, key=f"ent_party_{n}")
+    new_name = b.text_input("Or new party name", placeholder="e.g. Ramesh Sharma", key=f"ent_new_{n}")
+    name = new_name.strip() or ("" if existing.startswith("--") else existing)
+
+    stored_phone = ""
+    if name:
+        m = parties[parties["name"].str.lower() == name.lower()]
+        if not m.empty:
+            name = m.iloc[0]["name"]
+            stored_phone = (m.iloc[0]["phone"] or "").strip()
+
+    if stored_phone:
+        # Party ka number ek baar save ho gaya to hamesha wahi rahega
+        st.text_input("Phone", value=stored_phone, disabled=True,
+                      key=f"ent_ph_locked_{n}_{name}",
+                      help="Is party ka saved number, har entry me yahi use hoga.")
+        phone = stored_phone
+    else:
+        phone = st.text_input("Phone (required)", placeholder="98xxxxxx10",
+                              key=f"ent_ph_{n}_{name}")
+
     with st.form("entry_form", clear_on_submit=True):
         kind = st.radio("Transaction type", list(KINDS.keys()), horizontal=True)
-        a, b = st.columns(2)
-        existing = a.selectbox("Existing party", options, index=idx)
-        new_name = b.text_input("Or new party name", placeholder="e.g. Ramesh Sharma")
-        c, d, e = st.columns(3)
+        c, d = st.columns(2)
         amount = c.number_input("Amount (₹)", min_value=0.0, step=100.0, format="%.2f")
         tdate = d.date_input("Date", value=date.today())
-        phone = e.text_input("Phone (optional)", placeholder="98xxxxxx10")
         note = st.text_input("Note (optional)", placeholder="e.g. shop supplies, wedding expenses")
         submitted = st.form_submit_button("Save payment", type="primary", use_container_width=True)
 
     if submitted:
-        name = new_name.strip() or ("" if existing.startswith("--") else existing)
+        digits = "".join(ch for ch in phone if ch.isdigit())
         if not name:
             st.error("Select or enter a party name.")
+        elif not stored_phone and len(digits) < 10:
+            st.error("Phone number is required (at least 10 digits).")
         elif amount <= 0:
             st.error("Amount must be greater than 0.")
         else:
@@ -858,9 +887,9 @@ def page_new_entry():
                 "INSERT INTO txns(party_id, tdate, kind, amount, note) VALUES (?,?,?,?,?)",
                 (pid, tdate.isoformat(), kind, float(amount), note.strip()),
             )
-            st.success(f"Entry saved: {inr(amount)} with {name}.")
-            st.toast("Entry saved")
-            show_cash_left()
+            st.session_state["entry_flash"] = f"Entry saved: {inr(amount)} with {name}."
+            st.session_state["entry_n"] = n + 1  # party/phone fields reset
+            st.rerun()
 
 
 SHEETS = ["Udhari", "Income", "Loan", "Kist_Penalty"]
