@@ -34,8 +34,8 @@ LEGACY_KINDS = {
 }
 
 INCOME_SOURCES = [
-    "Salary", "Business", "Bonus", "Overtime", "Commission",
-    "Rent", "Interest", "Gift", "Other",
+    "Salary", "Business", "Lottery", "Bonus", "Overtime", "Commission",
+    "Rent", "Interest", "Gift", "Prize / Inaam", "Refund", "Other",
 ]
 
 EXPENSE_CATS = [
@@ -1537,22 +1537,35 @@ def edit_income():
     }
     rid = st.selectbox("Select income entry", list(labels), format_func=labels.get, key="edit_inc_pick")
     r = df[df["id"] == rid].iloc[0]
+    cur = (r["source"] or "").strip()
+    in_list = cur in INCOME_SOURCES and cur != "Other"
+    # form ke bahar, taaki 'Other' chunte hi naam likhne ka box turant aa jaye
+    src_pick = st.selectbox(
+        "Source", INCOME_SOURCES, key=f"edit_inc_src_{rid}",
+        index=INCOME_SOURCES.index(cur) if in_list else INCOME_SOURCES.index("Other"),
+    )
+    other = ""
+    if src_pick == "Other":
+        other = st.text_input(
+            "Specify source", value="" if in_list else cur,
+            placeholder="e.g. Tuition, Freelance", key=f"edit_inc_other_{rid}",
+        )
     with st.form(f"edit_inc_{rid}"):
         a, b = st.columns(2)
         amount = a.number_input("Amount (₹)", min_value=0.0, value=float(r["amount"]), step=500.0, format="%.2f")
         idate = b.date_input("Date received", value=_d(r["date"]))
-        source = st.text_input("Source", value=r["source"] or "")
         note = st.text_input("Note (optional)", value=r["note"] or "")
         ok = st.form_submit_button("Save changes", type="primary", use_container_width=True)
     if ok:
+        source = other.strip() if src_pick == "Other" else src_pick
         if amount <= 0:
             st.error("Amount must be greater than 0.")
-        elif not source.strip():
-            st.error("Source cannot be empty.")
+        elif not source:
+            st.error("Specify the source when 'Other' is selected.")
         else:
             run(
                 "UPDATE income SET idate=?, amount=?, source=?, note=? WHERE id=?",
-                (idate.isoformat(), float(amount), source.strip(), note.strip(), int(rid)),
+                (idate.isoformat(), float(amount), source, note.strip(), int(rid)),
             )
             st.session_state["flash"] = "Income entry updated."
             st.rerun()
