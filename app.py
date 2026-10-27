@@ -44,8 +44,12 @@ BLUE = "#0f3d4c"
 
 P_DASH = "Dashboard"
 P_NEW = "New entry"
+P_EDIT = "Edit records"
 P_BACKUP = "Backup & restore"
-PAGES = [P_DASH, P_NEW, P_BACKUP]
+PAGES = [P_DASH, P_NEW, P_EDIT, P_BACKUP]
+
+# Password needed to edit or delete old records. Override with EDIT_PASSWORD in Streamlit secrets.
+EDIT_PASSWORD_DEFAULT = "0610"
 
 st.set_page_config(page_title="Udhari Khata", page_icon="📒", layout="wide")
 
@@ -1201,6 +1205,237 @@ def page_backup():
             st.success("  \n".join(msgs))
 
 
+# ---------------------------------------------------------------- edit records
+def edit_password():
+    try:
+        pw = st.secrets.get("EDIT_PASSWORD")
+    except Exception:
+        pw = None
+    return str(pw or EDIT_PASSWORD_DEFAULT)
+
+
+def edit_gate():
+    """Editing is locked until the edit password is entered."""
+    if st.session_state.get("edit_ok"):
+        return True
+    _, mid, _ = st.columns([1, 1.2, 1])
+    with mid:
+        st.info("Editing old records is protected. Enter the edit password to continue.")
+        with st.form("edit_login"):
+            entered = st.text_input("Edit password", type="password")
+            ok = st.form_submit_button("Unlock editing", use_container_width=True, type="primary")
+        if ok:
+            if hmac.compare_digest(entered.encode(), edit_password().encode()):
+                st.session_state["edit_ok"] = True
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+    return False
+
+
+def lock_edit():
+    st.session_state["edit_ok"] = False
+
+
+def cleanup_parties():
+    """Remove parties that no longer have any entries."""
+    run("DELETE FROM parties WHERE id NOT IN (SELECT DISTINCT party_id FROM txns)")
+
+
+def delete_block(table, rid, key, warn=""):
+    with st.expander("Delete this record"):
+        if warn:
+            st.warning(warn)
+        sure = st.checkbox("Yes, delete this record permanently", key=f"del_ok_{key}_{rid}")
+        if st.button("Delete", key=f"del_{key}_{rid}", disabled=not sure):
+            run(f"DELETE FROM {table} WHERE id = ?", (int(rid),))
+            cleanup_parties()
+            st.session_state["flash"] = "Record deleted."
+            st.rerun()
+
+
+def _d(v):
+    return date.fromisoformat(str(v)[:10])
+
+
+def edit_txns():
+    df = txns_df()
+    if df.empty:
+        st.info("No lending or borrowing entries yet.")
+        return
+    df = df.sort_values(["date", "id"], ascending=False)
+    labels = {
+        int(r["id"]): f"{r['date']} | {r['party']} | {r['kind']} | {inr(r['amount'])}"
+        for _, r in df.iterrows()
+    }
+    rid = st.selectbox("Select entry", list(labels), format_func=labels.get, key="edit_txn_pick")
+    r = df[df["id"] == rid].iloc[0]
+    kinds = list(KINDS)
+    with st.form(f"edit_txn_{rid}"):
+        name = st.text_input("Party name (change it to move this entry to another party)", value=r["party"])
+        kind = st.selectbox("Transaction type", kinds, index=kinds.index(r["kind"]) if r["kind"] in kinds else 0)
+        a, b = st.columns(2)
+        amount = a.number_input("Amount (₹)", min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
+        tdate = b.date_input("Date", value=_d(r["date"]))
+        note = st.text_input("Note (optional)", value=r["note"] or "")
+        ok = st.form_submit_button("Save changes", type="primary", use_container_width=True)
+    if ok:
+        if not name.strip():
+            st.error("Party name cannot be empty.")
+        elif amount <= 0:
+            st.error("Amount must be greater than 0.")
+        else:
+            pid = get_or_create_party(name)
+            run(
+                "UPDATE txns SET party_id=?, tdate=?, kind=?, amount=?, note=? WHERE id=?",
+                (pid, tdate.isoformat(), kind, float(amount), note.strip(), int(rid)),
+            )
+            cleanup_parties()
+            st.session_state["flash"] = "Entry updated."
+            st.rerun()
+    delete_block("txns", rid, "txn")
+
+
+def edit_income():
+    df = income_df()
+    if df.empty:
+        st.info("No income entries yet.")
+        return
+    df = df.sort_values(["date", "id"], ascending=False)
+    labels = {
+        int(r["id"]): f"{r['date']} | {r['source']} | {inr(r['amount'])}" for _, r in df.iterrows()
+    }
+    rid = st.selectbox("Select income entry", list(labels), format_func=labels.get, key="edit_inc_pick")
+    r = df[df["id"] == rid].iloc[0]
+    with st.form(f"edit_inc_{rid}"):
+        a, b = st.columns(2)
+        amount = a.number_input("Amount (₹)", min_value=0.0, value=float(r["amount"]), step=500.0, format="%.2f")
+        idate = b.date_input("Date received", value=_d(r["date"]))
+        source = st.text_input("Source", value=r["source"] or "")
+        note = st.text_input("Note (optional)", value=r["note"] or "")
+        ok = st.form_submit_button("Save changes", type="primary", use_container_width=True)
+    if ok:
+        if amount <= 0:
+            st.error("Amount must be greater than 0.")
+        elif not source.strip():
+            st.error("Source cannot be empty.")
+        else:
+            run(
+                "UPDATE income SET idate=?, amount=?, source=?, note=? WHERE id=?",
+                (idate.isoformat(), float(amount), source.strip(), note.strip(), int(rid)),
+            )
+            st.session_state["flash"] = "Income entry updated."
+            st.rerun()
+    delete_block("income", rid, "inc")
+
+
+def edit_loans():
+    df = loans_df()
+    if df.empty:
+        st.info("No loans yet.")
+        return
+    labels = {int(r["id"]): f"{r['name']} | {inr(r['kist_amount'])} × {int(r['total_kists'])}" for _, r in df.iterrows()}
+    rid = st.selectbox("Select loan", list(labels), format_func=labels.get, key="edit_loan_pick")
+    r = df[df["id"] == rid].iloc[0]
+    ptypes = list(LOAN_PEN_TYPES)
+    with st.form(f"edit_loan_{rid}"):
+        name = st.text_input("Loan name", value=r["name"])
+        a, b, c = st.columns(3)
+        loan_amount = a.number_input("Loan amount (₹, optional)", min_value=0.0, value=float(r["loan_amount"] or 0), step=1000.0, format="%.2f")
+        kist = b.number_input("Instalment amount (₹)", min_value=0.0, value=float(r["kist_amount"]), step=100.0, format="%.2f")
+        n = c.number_input("Number of instalments", min_value=1, value=int(r["total_kists"]), step=1)
+        d, e, f = st.columns(3)
+        ptype = d.selectbox(
+            "Penalty type", ptypes, format_func=LOAN_PEN_TYPES.get,
+            index=ptypes.index(r["penalty_type"]) if r["penalty_type"] in ptypes else 0,
+        )
+        pen = e.number_input("Penalty amount / % ", min_value=0.0, value=float(r["penalty_amount"]), step=10.0, format="%.2f")
+        first = f.date_input("First due date", value=_d(r["first_due"]))
+        note = st.text_input("Note (optional)", value=r["note"] or "")
+        ok = st.form_submit_button("Save changes", type="primary", use_container_width=True)
+    if ok:
+        name = name.strip()
+        if not name:
+            st.error("Enter a loan name.")
+        elif kist <= 0:
+            st.error("Instalment amount must be greater than 0.")
+        elif not query_df(
+            "SELECT 1 FROM loans WHERE name = ? COLLATE NOCASE AND id != ?", (name, int(rid))
+        ).empty:
+            st.error("Another loan already has this name.")
+        else:
+            run(
+                "UPDATE loans SET name=?, loan_amount=?, kist_amount=?, total_kists=?, first_due=?, "
+                "penalty_type=?, penalty_amount=?, note=? WHERE id=?",
+                (name, float(loan_amount), float(kist), int(n), first.isoformat(),
+                 ptype, float(pen), note.strip(), int(rid)),
+            )
+            st.session_state["flash"] = "Loan updated."
+            st.rerun()
+    delete_block("loans", rid, "loan", "Deleting a loan also deletes all its instalment and penalty payments.")
+
+
+def edit_loan_payments():
+    df = loan_pay_df()
+    if df.empty:
+        st.info("No instalment or penalty payments yet.")
+        return
+    df = df.sort_values(["date", "id"], ascending=False)
+    labels = {
+        int(r["id"]): f"{r['date']} | {r['loan']} | {r['kind']} | {inr(r['amount'])}"
+        for _, r in df.iterrows()
+    }
+    rid = st.selectbox("Select payment", list(labels), format_func=labels.get, key="edit_pay_pick")
+    r = df[df["id"] == rid].iloc[0]
+    loans = loans_df()
+    loan_ids = {row["name"]: int(row["id"]) for row in loans.to_dict("records")}
+    names = list(loan_ids)
+    kinds = ["kist", "penalty"]
+    with st.form(f"edit_pay_{rid}"):
+        loan = st.selectbox("Loan", names, index=names.index(r["loan"]) if r["loan"] in names else 0)
+        kind = st.radio(
+            "Payment type", kinds, horizontal=True,
+            format_func=lambda k: "Instalment" if k == "kist" else "Penalty",
+            index=kinds.index(r["kind"]) if r["kind"] in kinds else 0,
+        )
+        a, b = st.columns(2)
+        amount = a.number_input("Amount (₹)", min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
+        pdate = b.date_input("Payment date", value=_d(r["date"]))
+        note = st.text_input("Note (optional)", value=r["note"] or "")
+        ok = st.form_submit_button("Save changes", type="primary", use_container_width=True)
+    if ok:
+        if amount <= 0:
+            st.error("Amount must be greater than 0.")
+        else:
+            run(
+                "UPDATE loan_payments SET loan_id=?, pdate=?, kind=?, amount=?, note=? WHERE id=?",
+                (loan_ids[loan], pdate.isoformat(), kind, float(amount), note.strip(), int(rid)),
+            )
+            st.session_state["flash"] = "Payment updated."
+            st.rerun()
+    delete_block("loan_payments", rid, "pay")
+
+
+def page_edit():
+    hero("Edit records", "Correct or delete older entries")
+    if not edit_gate():
+        return
+    c1, c2 = st.columns([5, 1])
+    c1.caption("Editing is unlocked for this session.")
+    c2.button("Lock", on_click=lock_edit, use_container_width=True)
+    flash = st.session_state.pop("flash", None)
+    if flash:
+        st.success(flash)
+    sections = {
+        "Lending / borrowing": edit_txns,
+        "Income": edit_income,
+        "Loans": edit_loans,
+        "Instalment / penalty payments": edit_loan_payments,
+    }
+    pick = st.radio("Record type", list(sections), horizontal=True, key="edit_type")
+    sections[pick]()
+
+
 # ---------------------------------------------------------------- main
 def main():
     init_db()
@@ -1222,6 +1457,7 @@ def main():
     {
         P_DASH: page_dashboard,
         P_NEW: page_new_entry,
+        P_EDIT: page_edit,
         P_BACKUP: page_backup,
     }[st.session_state["page"]]()
 
