@@ -276,7 +276,7 @@ def income_df():
 
 
 LOAN_PEN_TYPES = {
-    "fixed": "Fixed amount per late instalment",
+    "fixed": "Fixed amount per late instalment (repeats for each extra month it stays unpaid)",
     "daily": "Fixed amount per day of delay",
     "pct": "% interest per month on the late instalment (pro rata by day)",
 }
@@ -327,7 +327,10 @@ def loan_schedule(loan, pays, today):
         elif ptype == "pct":
             penalty = kist * pen / 100 * late / 30
         else:
-            penalty = pen
+            # Fixed: one penalty if paid late within the due month, +1 more for every later month
+            ref = paid_on or today
+            months_over = (ref.year - due.year) * 12 + (ref.month - due.month)
+            penalty = pen * (1 + max(months_over, 0))
         rows.append({"no": i, "due": due, "paid_on": paid_on, "late": late, "penalty": penalty})
     return rows
 
