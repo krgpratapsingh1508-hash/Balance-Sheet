@@ -46,7 +46,7 @@ P_DASH = "Dashboard"
 P_NEW = "New entry"
 P_EDIT = "Admin panel"
 P_BACKUP = "Backup & restore"
-PAGES = [P_DASH, P_NEW, P_EDIT, P_BACKUP]
+PAGES = [P_DASH, P_NEW, P_BACKUP, P_EDIT]  # Admin panel is always last
 
 # Password needed to edit or delete old records. Override with EDIT_PASSWORD in Streamlit secrets.
 EDIT_PASSWORD_DEFAULT = "0610"
@@ -1493,8 +1493,44 @@ def admin_transactions():
     st.caption("To correct or delete an entry, open 'Edit records' above.")
 
 
+TRANSLATE_LANGS = {
+    "English": "en", "Hindi": "hi", "Gujarati": "gu", "Marathi": "mr",
+    "Punjabi": "pa", "Bengali": "bn", "Tamil": "ta", "Telugu": "te",
+    "Urdu": "ur", "Spanish": "es", "French": "fr", "German": "de",
+}
+
+
+def admin_translate():
+    """Simple text translator (needs the 'deep-translator' package and internet)."""
+    st.caption("Translate any text, for example a note or a message to a party.")
+    a, b = st.columns(2)
+    src = a.selectbox("From", ["Auto-detect"] + list(TRANSLATE_LANGS), key="tr_src")
+    tgt = b.selectbox("To", list(TRANSLATE_LANGS), index=1, key="tr_tgt")
+    text = st.text_area("Text to translate", height=150, key="tr_text", max_chars=4500)
+    if st.button("Translate", type="primary", key="tr_go"):
+        if not text.strip():
+            st.error("Enter some text to translate.")
+            return
+        try:
+            from deep_translator import GoogleTranslator
+        except ImportError:
+            st.error("Translation needs the 'deep-translator' package. Add it to requirements.txt and restart the app.")
+            return
+        try:
+            with st.spinner("Translating..."):
+                out = GoogleTranslator(
+                    source="auto" if src == "Auto-detect" else TRANSLATE_LANGS[src],
+                    target=TRANSLATE_LANGS[tgt],
+                ).translate(text.strip())
+        except Exception as exc:
+            st.error(f"Translation failed: {exc}")
+            return
+        st.markdown("**Translation**")
+        st.code(out or "", language=None, wrap_lines=True)
+
+
 def page_admin():
-    hero("Admin panel", "All transactions, and editing of older records")
+    hero("Admin panel", "All transactions, editing of older records, and translator")
     if not edit_gate():
         return
     c1, c2 = st.columns([5, 1])
@@ -1504,11 +1540,14 @@ def page_admin():
     if flash:
         st.success(flash)
     section = st.radio(
-        "Section", ["Transactions", "Edit records"], horizontal=True,
+        "Section", ["Transactions", "Edit records", "Translate"], horizontal=True,
         key="admin_section", label_visibility="collapsed",
     )
     if section == "Transactions":
         admin_transactions()
+        return
+    if section == "Translate":
+        admin_translate()
         return
     sections = {
         "Lending / borrowing": edit_txns,
