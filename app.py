@@ -1744,9 +1744,9 @@ def main():
 
     if st.session_state.get("_tr_fail"):
         st.sidebar.warning(
-            "Translation is not available right now (check internet and that 'deep-translator' "
-            "is installed). Showing English for the missing text."
+            "Translation is not available right now. Showing English for the missing text."
         )
+        st.sidebar.caption("Reason: " + str(st.session_state["_tr_fail"]))
 
 
 main()
