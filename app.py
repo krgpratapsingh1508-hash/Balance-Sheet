@@ -1556,6 +1556,20 @@ def site_lang():
     return st.session_state.get("_lang", "en")
 
 
+def _tr_fetch_mm(text, lang):
+    """Backup translator (MyMemory) used when Google blocks this server."""
+    from deep_translator import MyMemoryTranslator
+    kw = {}
+    try:
+        email = st.secrets.get("MYMEMORY_EMAIL", "")  # optional: raises the daily limit
+        if email:
+            kw["email"] = email
+    except Exception:
+        pass
+    t = MyMemoryTranslator(source="english", target=LANG_NAMES.get(lang, lang).lower(), **kw)
+    return "\n".join(t.translate(x) if x.strip() else x for x in text.split("\n"))
+
+
 def _tr_fetch(text, lang, tries=5):
     from deep_translator import GoogleTranslator
     last = None
@@ -1564,13 +1578,12 @@ def _tr_fetch(text, lang, tries=5):
             return GoogleTranslator(source="auto", target=lang).translate(text)
         except Exception as exc:
             last = exc
-            msg = str(exc).lower()
-            # retry only on rate limiting / temporary errors
-            if "too many" in msg or "429" in msg or "timed out" in msg or "server error" in msg:
-                time.sleep(4 * (2 ** i))  # 4s, 8s, 16s, 32s, 64s
-                continue
-            raise
-    raise last
+            if i < tries - 1:
+                time.sleep(4 * (2 ** i))  # 4s, 8s, 16s, 32s
+    try:  # Google refused: try the backup translator
+        return _tr_fetch_mm(text, lang)
+    except Exception:
+        raise last
 
 
 def _tr_save(lang, pairs):
@@ -1584,7 +1597,7 @@ def _tr_save(lang, pairs):
         con.commit()
 
 
-def _tr_batch(cores, lang, progress=None):
+def _tr_batch(cores, lang, progress=None, tries=5):
     """Translate many short texts with few requests (joined by newlines), pausing between requests.
 
     Google allows only ~5 requests per second, so one request per text is too many.
@@ -1605,7 +1618,7 @@ def _tr_batch(cores, lang, progress=None):
     if cur:
         groups.append(cur)
     for gi, grp in enumerate(groups):
-        out = _tr_fetch("\n".join(grp), lang) or ""
+        out = _tr_fetch("\n".join(grp), lang, tries) or ""
         parts = out.split("\n")
         if len(grp) == 1:
             _tr_save(lang, [(grp[0], out.strip())])
@@ -1614,7 +1627,7 @@ def _tr_batch(cores, lang, progress=None):
         else:  # lines got merged or split: do this group one by one, slowly
             for c in grp:
                 time.sleep(1.2)
-                _tr_save(lang, [(c, (_tr_fetch(c, lang) or "").strip())])
+                _tr_save(lang, [(c, (_tr_fetch(c, lang, tries) or "").strip())])
         if progress:
             progress((gi + 1) / len(groups))
         time.sleep(1.5)
@@ -1626,7 +1639,7 @@ def _tr_resolve(cores, lang):
     need = [c for c in dict.fromkeys(cores) if c not in mem]
     if need and not st.session_state.get("_tr_fail"):
         try:
-            _tr_batch(need, lang)
+            _tr_batch(need, lang, None, 1)
         except Exception as exc:  # no internet, package missing, rate limit ...
             st.session_state["_tr_fail"] = str(exc)[:200] or "error"
     return {c: mem.get(c, c) for c in cores}
@@ -1647,7 +1660,7 @@ def _segs(s):
     return segs
 
 
-def prewarm_language(lang, progress=None):
+def prewarm_language(lang, progress=None, tries=5):
     """Translate every text written in this app's source in a few requests and save it."""
     import ast
     tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
@@ -1658,7 +1671,7 @@ def prewarm_language(lang, progress=None):
             if len(s) > 400 or "<style" in s or not _LETTER.search(s):
                 continue
             cores += [g[1] for k, g in _segs(s) if k]
-    _tr_batch(cores, lang, progress)
+    _tr_batch(cores, lang, progress, tries)
 
 
 def tr(s):
@@ -1730,49 +1743,50 @@ def setup_language():
     _patch_streamlit()
 
 
+def ensure_language_ready():
+    """After a language is chosen, translate the whole site's text once (resumes if interrupted)."""
+    lang = site_lang()
+    if lang == "en" or get_setting("lang_ready_" + lang) == "1":
+        return
+    last = st.session_state.get("_warm_ts", 0)
+    if last and time.time() - last < 45:  # Google said no a moment ago: do not hammer it
+        return
+    bar = st.progress(0.0, text="Translating the site, please wait...")
+    try:
+        prewarm_language(lang, lambda f: bar.progress(f, text="Translating the site, please wait..."), tries=3)
+        set_setting("lang_ready_" + lang, "1")
+        st.session_state["_warm_ts"] = 0
+        done = True
+    except Exception as exc:
+        done = False
+        st.session_state["_warm_ts"] = time.time()
+        st.session_state["_tr_fail"] = str(exc)[:200] or "error"
+    bar.empty()
+    if done:
+        st.rerun()
+
+
+def _choose_lang():
+    code = LANGS[st.session_state["site_lang_pick"]]
+    set_setting("site_lang", code)  # saved (locked) for everyone, immediately
+    st.session_state["_warm_ts"] = 0
+
+
 def admin_translate():
-    """Choose the language of the whole site and lock it."""
+    """Choose the language of the whole site. It changes everywhere as soon as you pick it."""
     cur = site_lang()
     st.markdown("#### Site language")
     st.caption(
-        "The whole site is shown in the language you choose, for everyone who opens it. "
+        "Pick a language and the whole site changes to it at once, for everyone who opens it. "
         "The choice stays saved (locked) until you change it here."
     )
     names = list(LANGS)
-    pick = st.selectbox("Language", names, index=names.index(LANG_NAMES.get(cur, "English")), key="site_lang_pick")
-    a, b = st.columns(2)
-    if a.button("Apply and lock language", type="primary", use_container_width=True):
-        if LANGS[pick] != "en":
-            bar = st.progress(0.0, text="Translating the site text, please wait...")
-            ok, err = False, ""
-            for attempt in range(4):
-                try:
-                    prewarm_language(
-                        LANGS[pick],
-                        lambda f, a=attempt: bar.progress(f, text=f"Translating the site text (round {a + 1}/4)..."),
-                    )
-                    ok = True
-                    break
-                except Exception as exc:
-                    err = str(exc)[:200]
-                    bar.progress(0.0, text=f"Google asked us to slow down, waiting 30s (round {attempt + 1}/4)...")
-                    time.sleep(30)
-            if not ok:
-                bar.empty()
-                st.error(f"Translation could not finish: {err}. Press Apply again; the part already translated is kept.")
-                return
-        set_setting("site_lang", LANGS[pick])
-        st.session_state["flash"] = f"Site language is now {pick}."
-        st.rerun()
-    if b.button("Back to English", use_container_width=True, disabled=(cur == "en")):
-        set_setting("site_lang", "en")
-        st.session_state["flash"] = "Site language is now English."
-        st.rerun()
-    st.caption(
-        "The first time a language is used, pages load slowly while the text is translated; "
-        "after that it is fast. Needs internet and the 'deep-translator' package. "
-        "If the site ever becomes hard to read, open it with ?lang=en at the end of the address to see English."
+    st.selectbox(
+        "Language", names, index=names.index(LANG_NAMES.get(cur, "English")),
+        key="site_lang_pick", on_change=_choose_lang,
     )
+    if cur != "en" and get_setting("lang_ready_" + cur) != "1":
+        st.info("The site text is still being translated. It will finish by itself, and you can keep using the app.")
 
 
 def page_admin():
@@ -1812,6 +1826,7 @@ def main():
     st.markdown(CSS, unsafe_allow_html=True)
     if not check_password():
         return
+    ensure_language_ready()
     if "page" not in st.session_state or st.session_state["page"] not in PAGES:
         st.session_state["page"] = P_DASH
     st.sidebar.markdown('<div class="brand">Udhari Khata</div>', unsafe_allow_html=True)
