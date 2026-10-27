@@ -5,9 +5,7 @@ Three pages: Dashboard, New entry, Backup & restore.
 
 import calendar
 import hmac
-import re
 import sqlite3
-import time
 from contextlib import closing
 from datetime import date
 from html import escape
@@ -238,20 +236,6 @@ def init_db():
                 kind TEXT NOT NULL,
                 amount REAL NOT NULL CHECK(amount > 0),
                 note TEXT DEFAULT ''
-            );
-            """
-        )
-        c.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS settings(
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS tr_cache(
-                lang TEXT NOT NULL,
-                src TEXT NOT NULL,
-                out TEXT NOT NULL,
-                PRIMARY KEY(lang, src)
             );
             """
         )
@@ -642,7 +626,7 @@ def page_dashboard():
         st.subheader("Largest balances")
         top = s[s["balance"] != 0].copy()
         top["Amount"] = top["balance"].abs()
-        rec_l, pay_l = tr("Receivable"), tr("Payable")
+        rec_l, pay_l = "Receivable", "Payable"
         top["Status"] = top["balance"].apply(lambda b: rec_l if b > 0 else pay_l)
         top = top.sort_values("Amount", ascending=False).head(8)
         if top.empty:
@@ -653,13 +637,13 @@ def page_dashboard():
                 .mark_bar(cornerRadiusEnd=2, size=20)
                 .encode(
                     y=alt.Y("name:N", sort="-x", title=None),
-                    x=alt.X("Amount:Q", title=tr("Amount (₹)")),
+                    x=alt.X("Amount:Q", title="Amount (₹)"),
                     color=alt.Color(
                         "Status:N",
                         scale=alt.Scale(domain=[rec_l, pay_l], range=[GREEN, RED]),
                         legend=alt.Legend(orient="bottom", title=None),
                     ),
-                    tooltip=[alt.Tooltip("name:N", title=tr("Name")), "Status:N",
+                    tooltip=[alt.Tooltip("name:N", title="Name"), "Status:N",
                              alt.Tooltip("Amount:Q", format=",.2f")],
                 )
                 .properties(height=max(120, 38 * len(top)))
@@ -684,9 +668,9 @@ def page_dashboard():
             .mark_bar(cornerRadiusEnd=2, color=GREEN)
             .encode(
                 x=alt.X("month:N", title=None, sort=None),
-                y=alt.Y("amount:Q", title=tr("Amount (₹)")),
-                tooltip=[alt.Tooltip("month:N", title=tr("Month")),
-                         alt.Tooltip("amount:Q", title=tr("Income"), format=",.2f")],
+                y=alt.Y("amount:Q", title="Amount (₹)"),
+                tooltip=[alt.Tooltip("month:N", title="Month"),
+                         alt.Tooltip("amount:Q", title="Income", format=",.2f")],
             )
             .properties(height=220)
         )
@@ -1510,253 +1494,8 @@ def admin_transactions():
     st.caption("To correct or delete an entry, open 'Edit records' above.")
 
 
-# ---------------------------------------------------------------- site language
-# The whole site can be shown in one language. The admin picks it once; it is saved in
-# the database (locked) and applies to everyone. Translations come from Google (via the
-# 'deep-translator' package) and are cached in the database, so each text is fetched once.
-LANGS = {
-    "English": "en", "Hindi": "hi", "Gujarati": "gu", "Marathi": "mr",
-    "Punjabi": "pa", "Bengali": "bn", "Tamil": "ta", "Telugu": "te",
-    "Urdu": "ur", "Spanish": "es", "French": "fr", "German": "de",
-}
-LANG_NAMES = {v: k for k, v in LANGS.items()}
-
-_NUM = re.compile(r"([−+-]?₹?\d[\d,.:/-]*)")  # numbers, amounts, dates stay as they are
-_TAG = re.compile(r"(<[^>]*>|&[#a-zA-Z0-9]+;)")  # HTML tags are never translated
-_LETTER = re.compile(r"[A-Za-z]")
-# Streamlit functions whose first argument (and label/body/help/placeholder) is shown to the user
-TR_FUNCS = [
-    "markdown", "caption", "subheader", "header", "title", "info", "success", "warning",
-    "error", "toast", "button", "download_button", "form_submit_button", "checkbox",
-    "text_input", "text_area", "number_input", "date_input", "selectbox", "radio",
-    "expander", "metric", "file_uploader", "dataframe",
-]
-
-
-def get_setting(key, default=""):
-    df = query_df("SELECT value FROM settings WHERE key = ?", (key,))
-    return default if df.empty else str(df.iloc[0]["value"])
-
-
-def set_setting(key, value):
-    run(
-        "INSERT INTO settings(key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (key, value),
-    )
-
-
-@st.cache_resource
-def _tr_mem(lang):
-    df = query_df("SELECT src, out FROM tr_cache WHERE lang = ?", (lang,))
-    return dict(zip(df["src"], df["out"]))
-
-
-def site_lang():
-    return st.session_state.get("_lang", "en")
-
-
-def _tr_fetch(text, lang):
-    from deep_translator import GoogleTranslator
-    return GoogleTranslator(source="auto", target=lang).translate(text)
-
-
-def _tr_save(lang, pairs):
-    mem = _tr_mem(lang)
-    pairs = [(c, o) for c, o in pairs if o]
-    for c, o in pairs:
-        mem[c] = o
-    with closing(sqlite3.connect(DB_PATH)) as con:
-        con.executemany("INSERT OR REPLACE INTO tr_cache(lang, src, out) VALUES (?,?,?)",
-                        [(lang, c, o) for c, o in pairs])
-        con.commit()
-
-
-def _tr_batch(cores, lang, progress=None):
-    """Translate many short texts with few requests (joined by newlines), pausing between requests.
-
-    Google allows only ~5 requests per second, so one request per text is too many.
-    Raises on a Google error; whatever was translated before the error stays saved.
-    """
-    mem = _tr_mem(lang)
-    need = [c for c in dict.fromkeys(cores) if c not in mem]
-    groups, cur, size = [], [], 0
-    for c in need:
-        if "\n" in c:
-            groups.append([c])
-            continue
-        if cur and (size + len(c) > 3500 or len(cur) >= 40):
-            groups.append(cur)
-            cur, size = [], 0
-        cur.append(c)
-        size += len(c) + 1
-    if cur:
-        groups.append(cur)
-    for gi, grp in enumerate(groups):
-        out = _tr_fetch("\n".join(grp), lang) or ""
-        parts = out.split("\n")
-        if len(grp) == 1:
-            _tr_save(lang, [(grp[0], out.strip())])
-        elif len(parts) == len(grp):
-            _tr_save(lang, [(c, p.strip()) for c, p in zip(grp, parts)])
-        else:  # lines got merged or split: do this group one by one, slowly
-            for c in grp:
-                time.sleep(0.4)
-                _tr_save(lang, [(c, (_tr_fetch(c, lang) or "").strip())])
-        if progress:
-            progress((gi + 1) / len(groups))
-        time.sleep(0.5)
-
-
-def _tr_resolve(cores, lang):
-    """Translate texts that are not cached yet (normally few, as the cache is pre-filled)."""
-    mem = _tr_mem(lang)
-    need = [c for c in dict.fromkeys(cores) if c not in mem]
-    if need and not st.session_state.get("_tr_fail"):
-        try:
-            _tr_batch(need, lang)
-        except Exception as exc:  # no internet, package missing, rate limit ...
-            st.session_state["_tr_fail"] = str(exc)[:200] or "error"
-    return {c: mem.get(c, c) for c in cores}
-
-
-def _segs(s):
-    """Split a text into (translate?, piece) parts. Tags and numbers are kept as they are."""
-    segs = []
-    for i, part in enumerate(_TAG.split(s)):
-        if i % 2:
-            segs.append((0, part))
-            continue
-        for j, piece in enumerate(_NUM.split(part)):
-            if j % 2 or not _LETTER.search(piece):
-                segs.append((0, piece))
-            else:
-                segs.append((1, re.match(r"^(\s*)(.*?)(\s*)$", piece, re.S).groups()))
-    return segs
-
-
-def prewarm_language(lang, progress=None):
-    """Translate every text written in this app's source in a few requests and save it."""
-    import ast
-    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
-    cores = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            s = node.value
-            if len(s) > 400 or "<style" in s or not _LETTER.search(s):
-                continue
-            cores += [g[1] for k, g in _segs(s) if k]
-    _tr_batch(cores, lang, progress)
-
-
-def tr(s):
-    """Translate visible text into the site language. Numbers, dates and HTML tags are kept."""
-    lang = site_lang()
-    if lang == "en" or not isinstance(s, str) or "<style" in s or not _LETTER.search(s):
-        return s
-    segs = _segs(s)
-    done = _tr_resolve([g[1] for k, g in segs if k], lang)
-    return "".join(g if not k else g[0] + done[g[1]] + g[2] for k, g in segs)
-
-
-def _tr_prep(name, a, k):
-    a = list(a)
-    if name == "dataframe":
-        if a and isinstance(a[0], pd.DataFrame) and site_lang() != "en":
-            d = a[0].copy()
-            for col in d.columns:
-                if d[col].dtype == object and d[col].nunique() <= 20:
-                    d[col] = d[col].map(lambda v: tr(v) if isinstance(v, str) else v)
-            names = {c: tr(str(c)) for c in d.columns}
-            a[0] = d.rename(columns=names)
-            if k.get("column_config"):
-                k["column_config"] = {names.get(c, c): v for c, v in k["column_config"].items()}
-        return tuple(a), k
-    if a and isinstance(a[0], str):
-        a[0] = tr(a[0])
-    for key in ("label", "body", "placeholder", "help", "text"):
-        if isinstance(k.get(key), str):
-            k[key] = tr(k[key])
-    if name in ("selectbox", "radio"):
-        base = k.get("format_func") or str
-        k["format_func"] = lambda x, _f=base: tr(str(_f(x)))
-    return tuple(a), k
-
-
-def _tr_wrap_cls(name, orig):
-    def w(self, *a, **k):
-        a, k = _tr_prep(name, a, k)
-        return orig(self, *a, **k)
-    return w
-
-
-def _tr_wrap_mod(name, orig):
-    def w(*a, **k):
-        a, k = _tr_prep(name, a, k)
-        return orig(*a, **k)
-    return w
-
-
-def _patch_streamlit():
-    """Make every visible Streamlit text go through tr() (the original functions are kept)."""
-    from streamlit.delta_generator import DeltaGenerator as DG
-    store = st.__dict__.setdefault("_tr_orig", {})
-    for name in TR_FUNCS:
-        if ("cls", name) not in store:
-            store[("cls", name)] = getattr(DG, name)
-            store[("mod", name)] = getattr(st, name)
-        setattr(DG, name, _tr_wrap_cls(name, store[("cls", name)]))
-        setattr(st, name, _tr_wrap_mod(name, store[("mod", name)]))
-
-
-def setup_language():
-    st.session_state["_tr_fail"] = ""
-    lang = get_setting("site_lang", "en")
-    if st.query_params.get("lang") == "en":  # safety exit: open the site with ?lang=en
-        lang = "en"
-    st.session_state["_lang"] = lang if lang in LANG_NAMES else "en"
-    _patch_streamlit()
-
-
-def admin_translate():
-    """Choose the language of the whole site and lock it."""
-    cur = site_lang()
-    st.markdown("#### Site language")
-    st.caption(
-        "The whole site is shown in the language you choose, for everyone who opens it. "
-        "The choice stays saved (locked) until you change it here."
-    )
-    names = list(LANGS)
-    pick = st.selectbox("Language", names, index=names.index(LANG_NAMES.get(cur, "English")), key="site_lang_pick")
-    a, b = st.columns(2)
-    if a.button("Apply and lock language", type="primary", use_container_width=True):
-        if LANGS[pick] != "en":
-            bar = st.progress(0.0, text="Translating the site text, please wait...")
-            try:
-                prewarm_language(LANGS[pick], lambda f: bar.progress(f, text="Translating the site text, please wait..."))
-            except Exception as exc:
-                bar.empty()
-                st.error(
-                    f"Translation could not finish: {str(exc)[:200]}. "
-                    "Wait a minute and press Apply again; the part already translated is kept."
-                )
-                return
-        set_setting("site_lang", LANGS[pick])
-        st.session_state["flash"] = f"Site language is now {pick}."
-        st.rerun()
-    if b.button("Back to English", use_container_width=True, disabled=(cur == "en")):
-        set_setting("site_lang", "en")
-        st.session_state["flash"] = "Site language is now English."
-        st.rerun()
-    st.caption(
-        "The first time a language is used, pages load slowly while the text is translated; "
-        "after that it is fast. Needs internet and the 'deep-translator' package. "
-        "If the site ever becomes hard to read, open it with ?lang=en at the end of the address to see English."
-    )
-
-
 def page_admin():
-    hero("Admin panel", "All transactions, editing of older records, and translator")
+    hero("Admin panel", "All transactions and editing of older records")
     if not edit_gate():
         return
     c1, c2 = st.columns([5, 1])
@@ -1766,14 +1505,11 @@ def page_admin():
     if flash:
         st.success(flash)
     section = st.radio(
-        "Section", ["Transactions", "Edit records", "Translate"], horizontal=True,
+        "Section", ["Transactions", "Edit records"], horizontal=True,
         key="admin_section", label_visibility="collapsed",
     )
     if section == "Transactions":
         admin_transactions()
-        return
-    if section == "Translate":
-        admin_translate()
         return
     sections = {
         "Lending / borrowing": edit_txns,
@@ -1788,7 +1524,6 @@ def page_admin():
 # ---------------------------------------------------------------- main
 def main():
     init_db()
-    setup_language()
     st.markdown(CSS, unsafe_allow_html=True)
     if not check_password():
         return
@@ -1810,12 +1545,6 @@ def main():
         P_EDIT: page_admin,
         P_BACKUP: page_backup,
     }[st.session_state["page"]]()
-
-    if st.session_state.get("_tr_fail"):
-        st.sidebar.warning(
-            "Translation is not available right now. Showing English for the missing text."
-        )
-        st.sidebar.caption("Reason: " + str(st.session_state["_tr_fail"]))
 
 
 main()
