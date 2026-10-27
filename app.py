@@ -44,7 +44,7 @@ BLUE = "#0f3d4c"
 
 P_DASH = "Dashboard"
 P_NEW = "New entry"
-P_EDIT = "Edit records"
+P_EDIT = "Admin panel"
 P_BACKUP = "Backup & restore"
 PAGES = [P_DASH, P_NEW, P_EDIT, P_BACKUP]
 
@@ -1237,7 +1237,9 @@ def edit_gate():
 
 
 def lock_edit():
+    """Lock the admin panel and go back to the dashboard."""
     st.session_state["edit_ok"] = False
+    st.session_state["page"] = P_DASH
 
 
 def cleanup_parties():
@@ -1433,16 +1435,81 @@ def edit_loan_payments():
     delete_block("loan_payments", rid, "pay")
 
 
-def page_edit():
-    hero("Edit records", "Correct or delete older entries")
+IN_KINDS = ("Repayment received", "Money borrowed")
+
+
+def all_transactions():
+    """Every money movement (lending, income, loan payments) in one table."""
+    rows = []
+    for r in txns_df().itertuples():
+        rows.append({
+            "Date": r.date, "Group": "Lending / borrowing", "Type": r.kind, "Party / loan": r.party,
+            "Direction": "In" if r.kind in IN_KINDS else "Out", "Amount": float(r.amount), "Note": r.note or "",
+        })
+    for r in income_df().itertuples():
+        rows.append({
+            "Date": r.date, "Group": "Income", "Type": "Income", "Party / loan": r.source,
+            "Direction": "In", "Amount": float(r.amount), "Note": r.note or "",
+        })
+    for r in loan_pay_df().itertuples():
+        rows.append({
+            "Date": r.date, "Group": "Loan payments",
+            "Type": "Instalment" if r.kind == "kist" else "Penalty", "Party / loan": r.loan,
+            "Direction": "Out", "Amount": float(r.amount), "Note": r.note or "",
+        })
+    cols = ["Date", "Group", "Type", "Party / loan", "Direction", "Amount", "Note"]
+    df = pd.DataFrame(rows, columns=cols)
+    return df.sort_values("Date", ascending=False, kind="stable").reset_index(drop=True)
+
+
+def admin_transactions():
+    df = all_transactions()
+    if df.empty:
+        st.info("No transactions yet.")
+        return
+    f1, f2 = st.columns([1, 2])
+    group = f1.selectbox("Show", ["All", "Lending / borrowing", "Income", "Loan payments"], key="adm_group")
+    q = f2.text_input("Search party, loan or note", key="adm_q")
+    if group != "All":
+        df = df[df["Group"] == group]
+    if q.strip():
+        s = q.strip()
+        mask = (
+            df["Party / loan"].str.contains(s, case=False, regex=False)
+            | df["Note"].str.contains(s, case=False, regex=False)
+        )
+        df = df[mask]
+    money_in = float(df.loc[df["Direction"] == "In", "Amount"].sum())
+    money_out = float(df.loc[df["Direction"] == "Out", "Amount"].sum())
+    k1, k2, k3 = st.columns(3)
+    k1.markdown(kpi("Money in", inr(money_in), f"{int((df['Direction'] == 'In').sum())} entries", "g"), unsafe_allow_html=True)
+    k2.markdown(kpi("Money out", inr(money_out), f"{int((df['Direction'] == 'Out').sum())} entries", "r"), unsafe_allow_html=True)
+    k3.markdown(kpi("Net", inr(money_in - money_out), "in − out", "g" if money_in >= money_out else "r"), unsafe_allow_html=True)
+    st.write("")
+    st.dataframe(
+        df.drop(columns=["Group"]), hide_index=True, use_container_width=True,
+        column_config={"Amount": st.column_config.NumberColumn(format="₹%.2f")},
+    )
+    st.caption("To correct or delete an entry, open 'Edit records' above.")
+
+
+def page_admin():
+    hero("Admin panel", "All transactions, and editing of older records")
     if not edit_gate():
         return
     c1, c2 = st.columns([5, 1])
-    c1.caption("Editing is unlocked for this session.")
+    c1.caption("Admin panel is unlocked for this session.")
     c2.button("Lock", on_click=lock_edit, use_container_width=True)
     flash = st.session_state.pop("flash", None)
     if flash:
         st.success(flash)
+    section = st.radio(
+        "Section", ["Transactions", "Edit records"], horizontal=True,
+        key="admin_section", label_visibility="collapsed",
+    )
+    if section == "Transactions":
+        admin_transactions()
+        return
     sections = {
         "Lending / borrowing": edit_txns,
         "Income": edit_income,
@@ -1474,7 +1541,7 @@ def main():
     {
         P_DASH: page_dashboard,
         P_NEW: page_new_entry,
-        P_EDIT: page_edit,
+        P_EDIT: page_admin,
         P_BACKUP: page_backup,
     }[st.session_state["page"]]()
 
