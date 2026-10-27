@@ -38,6 +38,12 @@ INCOME_SOURCES = [
     "Rent", "Interest", "Gift", "Other",
 ]
 
+EXPENSE_CATS = [
+    "Ghar / Ration", "Khana-Peena", "Petrol / Travel", "Bijli / Pani / Bill",
+    "Dawai / Ilaaj", "Shopping", "Padhai / Fees", "Dukaan / Business",
+    "Shaadi / Function", "Other",
+]
+
 GREEN = "#1e7a4f"
 RED = "#b4372f"
 BLUE = "#0f3d4c"
@@ -218,6 +224,14 @@ def init_db():
                 source TEXT DEFAULT '',
                 note TEXT DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS expenses(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                edate TEXT NOT NULL,
+                amount REAL NOT NULL CHECK(amount > 0),
+                place TEXT NOT NULL,
+                category TEXT DEFAULT 'Other',
+                note TEXT DEFAULT ''
+            );
             CREATE TABLE IF NOT EXISTS loans(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE NOT NULL COLLATE NOCASE,
@@ -271,6 +285,14 @@ def txns_df():
 
 def income_df():
     df = query_df("SELECT id, idate AS date, amount, source, note FROM income ORDER BY idate, id")
+    df["month"] = df["date"].str[:7]
+    return df
+
+
+def expenses_df():
+    df = query_df(
+        "SELECT id, edate AS date, amount, place, category, note FROM expenses ORDER BY edate, id"
+    )
     df["month"] = df["date"].str[:7]
     return df
 
@@ -422,8 +444,8 @@ def party_card(r, key):
         )
 
 
-CF_COLS = ["Income", "Udhar diya", "Udhar wapas diya", "Kist", "Penalty", "Wapas mile", "Udhar liya"]
-CF_OUT = ["Udhar diya", "Udhar wapas diya", "Kist", "Penalty"]  # paisa gaya
+CF_COLS = ["Income", "Udhar diya", "Udhar wapas diya", "Kist", "Penalty", "Kharcha", "Wapas mile", "Udhar liya"]
+CF_OUT = ["Udhar diya", "Udhar wapas diya", "Kist", "Penalty", "Kharcha"]  # paisa gaya
 CF_IN = ["Income", "Wapas mile", "Udhar liya"]  # paisa aaya
 
 
@@ -443,6 +465,9 @@ def cash_flow():
             "Wapas mile": amt.where(kind == "Repayment received", 0.0),
             "Udhar liya": amt.where(kind == "Money borrowed", 0.0),
         }))
+    ex = expenses_df()
+    if not ex.empty:
+        parts.append(pd.DataFrame({"month": ex["month"], "Kharcha": ex["amount"]}))
     p = loan_pay_df()
     if not p.empty:
         parts.append(pd.DataFrame({
@@ -480,7 +505,7 @@ def cash_section():
     k1, k2, k3 = st.columns(3)
     k1.markdown(kpi("Total income", inr(income), "to date", "g"), unsafe_allow_html=True)
     k2.markdown(
-        kpi("Total outflow", inr(gaya), "lent, repaid, instalments, penalties", "r"),
+        kpi("Total outflow", inr(gaya), "lent, repaid, instalments, penalties, kharcha", "r"),
         unsafe_allow_html=True,
     )
     k3.markdown(
@@ -490,7 +515,8 @@ def cash_section():
     )
     st.caption(
         f"Outflow: lent {inr(cf['Udhar diya'].sum())}, repaid {inr(cf['Udhar wapas diya'].sum())}, "
-        f"instalments {inr(cf['Kist'].sum())}, penalties {inr(cf['Penalty'].sum())}. "
+        f"instalments {inr(cf['Kist'].sum())}, penalties {inr(cf['Penalty'].sum())}, "
+        f"kharcha {inr(cf['Kharcha'].sum())}. "
         f"Other inflow: repayments received {inr(cf['Wapas mile'].sum())}, borrowed {inr(cf['Udhar liya'].sum())}."
     )
     with st.expander("Monthly breakdown"):
@@ -505,6 +531,76 @@ def cash_section():
         st.dataframe(
             tbl, hide_index=True, use_container_width=True,
             column_config={c: money for c in ["Income", "Other inflow", "Outflow", "Net", "Cumulative"]},
+        )
+    st.write("")
+
+
+def expense_section():
+    ex = expenses_df()
+    if ex.empty:
+        return
+    st.subheader("Kharcha: paisa kaha kaha gaya")
+    months = sorted(ex["month"].unique(), reverse=True)
+    pick = st.selectbox("Period", ["All time"] + months, key="exp_period")
+    v = ex if pick == "All time" else ex[ex["month"] == pick]
+    if v.empty:
+        st.info("No kharcha in this period.")
+        return
+    v = v.assign(place_key=v["place"].str.strip().str.lower())
+    by_place = (
+        v.groupby("place_key")
+        .agg(Place=("place", "first"), Category=("category", "first"),
+             Entries=("id", "count"), Total=("amount", "sum"), Last=("date", "max"))
+        .sort_values("Total", ascending=False).reset_index(drop=True)
+    )
+    total = float(v["amount"].sum())
+    by_place["Share %"] = (by_place["Total"] / total * 100).round(1)
+    by_cat = v.groupby("category")["amount"].sum().sort_values(ascending=False).reset_index()
+    by_cat.columns = ["Category", "Total"]
+
+    k1, k2, k3 = st.columns(3)
+    k1.markdown(kpi("Total kharcha", inr(total), f"{len(v)} entries", "r"), unsafe_allow_html=True)
+    k2.markdown(kpi("Sabse zyada", inr(by_place.iloc[0]["Total"]), str(by_place.iloc[0]["Place"]), "r"),
+                unsafe_allow_html=True)
+    k3.markdown(kpi("Top category", inr(by_cat.iloc[0]["Total"]), str(by_cat.iloc[0]["Category"]), "b"),
+                unsafe_allow_html=True)
+    st.write("")
+
+    l, r = st.columns([1.35, 1])
+    with l:
+        st.markdown("**Kahan kitna gaya**")
+        top = by_place.head(10)
+        chart = (
+            alt.Chart(top)
+            .mark_bar(cornerRadiusEnd=2, size=18, color=RED)
+            .encode(
+                y=alt.Y("Place:N", sort="-x", title=None),
+                x=alt.X("Total:Q", title="Amount (₹)"),
+                tooltip=["Place", "Category", "Entries", alt.Tooltip("Total:Q", format=",.2f")],
+            )
+            .properties(height=max(120, 32 * len(top)))
+        )
+        st.altair_chart(chart, use_container_width=True)
+    with r:
+        st.markdown("**Category-wise**")
+        st.dataframe(
+            by_cat, hide_index=True, use_container_width=True,
+            column_config={"Total": st.column_config.NumberColumn(format="₹%.2f")},
+        )
+
+    with st.expander("Place-wise full list"):
+        st.dataframe(
+            by_place[["Place", "Category", "Entries", "Total", "Share %", "Last"]],
+            hide_index=True, use_container_width=True,
+            column_config={"Total": st.column_config.NumberColumn(format="₹%.2f")},
+        )
+    with st.expander("All kharcha entries"):
+        st.dataframe(
+            v.sort_values(["date", "id"], ascending=False)[["date", "place", "category", "amount", "note"]]
+            .rename(columns={"date": "Date", "place": "Place", "category": "Category",
+                             "amount": "Amount", "note": "Note"}),
+            hide_index=True, use_container_width=True,
+            column_config={"Amount": st.column_config.NumberColumn(format="₹%.2f")},
         )
     st.write("")
 
@@ -594,7 +690,7 @@ def page_dashboard():
     hero("Dashboard", f"Your financial position as of {date.today().strftime('%d %b %Y')}")
     df = txns_df()
     inc = income_df()
-    if df.empty and inc.empty and loans_df().empty:
+    if df.empty and inc.empty and loans_df().empty and expenses_df().empty:
         st.info("No records yet. Add your first entry to get started.")
         st.button("Add first entry", on_click=go, args=(P_NEW,), type="primary")
         return
@@ -619,6 +715,7 @@ def page_dashboard():
     st.write("")
 
     cash_section()
+    expense_section()
     loan_section()
 
     left, right = st.columns([1.35, 1])
@@ -730,6 +827,41 @@ def income_form():
             show_cash_left()
 
 
+def expense_form():
+    # form ke bahar, taaki 'Other' chunte hi naam likhne ka box turant aa jaye
+    cat = st.selectbox("Category", EXPENSE_CATS, key="exp_cat")
+    other = ""
+    if cat == "Other":
+        other = st.text_input("Specify category", placeholder="e.g. Gift, Repair", key="exp_other")
+    known = expenses_df()["place"].str.strip()
+    known = sorted({p for p in known if p}, key=str.lower)
+    with st.form("expense_form", clear_on_submit=True):
+        place = st.text_input("Kahan kharch kiya", placeholder="e.g. Big Bazaar, Petrol pump, Medical store")
+        a, b = st.columns(2)
+        amount = a.number_input("Amount (₹)", min_value=0.0, step=100.0, format="%.2f")
+        edate = b.date_input("Date", value=date.today())
+        note = st.text_input("Note (optional)", placeholder="e.g. monthly ration, bike petrol")
+        ok = st.form_submit_button("Save kharcha", type="primary", use_container_width=True)
+    if known:
+        st.caption("Pehle ke places: " + ", ".join(known[:12]))
+    if ok:
+        final_cat = other.strip() if cat == "Other" else cat
+        if not place.strip():
+            st.error("Enter where the money was spent.")
+        elif amount <= 0:
+            st.error("Amount must be greater than 0.")
+        elif not final_cat:
+            st.error("Specify the category when 'Other' is selected.")
+        else:
+            run(
+                "INSERT INTO expenses(edate, amount, place, category, note) VALUES (?,?,?,?,?)",
+                (edate.isoformat(), float(amount), place.strip(), final_cat, note.strip()),
+            )
+            st.success(f"Kharcha of {inr(amount)} at {place.strip()} saved.")
+            st.toast("Kharcha saved")
+            show_cash_left()
+
+
 def loan_entry_form():
     mode = st.radio(
         "Action", ["Add new loan", "Record payment"],
@@ -820,7 +952,7 @@ def loan_entry_form():
 def page_new_entry():
     hero("New entry", "Record a transaction, income or loan payment")
     typ = st.radio(
-        "Entry type", ["Lending / borrowing", "Income", "Loan / instalment"],
+        "Entry type", ["Lending / borrowing", "Income", "Loan / instalment", "Kharcha (expense)"],
         horizontal=True, key="entry_type",
     )
     if typ == "Income":
@@ -828,6 +960,9 @@ def page_new_entry():
         return
     if typ == "Loan / instalment":
         loan_entry_form()
+        return
+    if typ == "Kharcha (expense)":
+        expense_form()
         return
     parties = parties_df()
     pre = st.session_state.pop("prefill_party", None)
@@ -892,7 +1027,8 @@ def page_new_entry():
             st.rerun()
 
 
-SHEETS = ["Udhari", "Income", "Loan", "Kist_Penalty"]
+SHEETS = ["Udhari", "Income", "Loan", "Kist_Penalty", "Kharcha"]
+EXP_COLS = ["date", "amount", "place", "category", "note"]
 LOAN_COLS = ["name", "loan_amount", "kist_amount", "total_kists", "first_due",
              "penalty_type", "penalty_amount", "note"]
 PAY_COLS = ["loan", "date", "kind", "amount", "note"]
@@ -975,6 +1111,10 @@ def template_xlsx():
     make(ws4, PAY_COLS, [24, 14, 12, 14, 30])
     dropdown(ws4, ["kist", "penalty"], "C2:C1000")
 
+    ws6 = wb.create_sheet("Kharcha")
+    make(ws6, EXP_COLS, [14, 14, 28, 22, 36])
+    dropdown(ws6, EXPENSE_CATS[:-1], "D2:D1000", strict=False)
+
     ws5 = wb.create_sheet("Instructions")
     lines = [
         ("How to prepare the restore file", True),
@@ -995,6 +1135,11 @@ def template_xlsx():
         ("Income sheet", True),
         ("date, amount, note -> as above", False),
         ("source -> where the income came from (for example Salary, Bonus, Rent, or your own label)", False),
+        ("", False),
+        ("Kharcha sheet (expenses)", True),
+        ("date, amount, note -> as above", False),
+        ("place    -> where the money was spent (required)", False),
+        ("category -> for example Ghar / Ration, Petrol / Travel, or your own label", False),
         ("", False),
         ("Loan sheet (one loan per row)", True),
         ("name           -> loan name (must be unique)", False),
@@ -1029,7 +1174,7 @@ def wipe_all_data():
     """Saari tables ka poora data hata deta hai (ids bhi shuru se)."""
     with closing(sqlite3.connect(DB_PATH)) as c:
         c.execute("PRAGMA foreign_keys = ON")
-        for t in ("loan_payments", "loans", "txns", "parties", "income"):
+        for t in ("loan_payments", "loans", "txns", "parties", "income", "expenses"):
             c.execute(f"DELETE FROM {t}")
         c.execute("DELETE FROM sqlite_sequence")
         c.commit()
@@ -1048,7 +1193,7 @@ def wipe_section(counts):
     st.caption(counts)
     with st.expander("Danger zone"):
         st.error(
-            "This permanently deletes all lending records, parties, income, loans and instalments. "
+            "This permanently deletes all lending records, parties, income, kharcha, loans and instalments. "
             "It cannot be undone. Download an Excel backup first."
         )
         sure = st.checkbox("I understand that all data will be deleted", key="wipe_sure")
@@ -1076,8 +1221,9 @@ def page_backup():
     loan_export = loans[LOAN_COLS]
     pays = loan_pay_df()
     pay_export = pays[PAY_COLS[:1] + PAY_COLS[1:]]
+    exp_export = expenses_df()[EXP_COLS]
     phones = parties_df()
-    empty = export.empty and inc_export.empty and loan_export.empty
+    empty = export.empty and inc_export.empty and loan_export.empty and exp_export.empty
 
     c1, c2 = st.columns(2)
     # restore me error aane par bhi ye hissa dikhta rahe, isliye pehle hi bana liya
@@ -1085,19 +1231,20 @@ def page_backup():
     with wipe_box:
         wipe_section(
             f"Currently stored: {len(export)} lending entries, {len(phones)} parties, "
-            f"{len(inc_export)} income entries, {len(loan_export)} loans, {len(pay_export)} instalment/penalty payments"
+            f"{len(inc_export)} income entries, {len(exp_export)} kharcha entries, {len(loan_export)} loans, {len(pay_export)} instalment/penalty payments"
         )
     with c1:
         st.markdown("#### Backup")
         st.caption(
             f"{len(export)} lending entries, {len(phones)} parties, "
-            f"{len(inc_export)} income entries, {len(loan_export)} loans"
+            f"{len(inc_export)} income entries, {len(exp_export)} kharcha entries, {len(loan_export)} loans"
         )
         st.download_button(
             "Download Excel backup",
             to_xlsx_multi({
                 "Udhari": export, "Income": inc_export,
                 "Loan": loan_export, "Kist_Penalty": pay_export,
+                "Kharcha": exp_export,
             }),
             file_name=f"udhari_backup_{date.today().isoformat()}.xlsx",
             mime=XLSX_MIME, disabled=empty, type="primary",
@@ -1114,9 +1261,9 @@ def page_backup():
         up = st.file_uploader("Select a backup file", type=["xlsx", "csv"], label_visibility="collapsed")
         if up is not None and st.button("Restore"):
             sheets = read_backup_all(up)
-            ud, ic, lo, kp = (sheets[k] for k in SHEETS)
-            if all(x is None for x in (ud, ic, lo, kp)):
-                st.error("The file must contain at least one of these sheets: Udhari, Income, Loan, Kist_Penalty.")
+            ud, ic, lo, kp, ke = (sheets[k] for k in SHEETS)
+            if all(x is None for x in (ud, ic, lo, kp, ke)):
+                st.error("The file must contain at least one of these sheets: Udhari, Income, Loan, Kist_Penalty, Kharcha.")
                 return
 
             msgs = []
@@ -1166,6 +1313,37 @@ def page_backup():
                     have.add(key)
                     added += 1
                 msgs.append(f"Income: {added} entries added, {skipped} already present.")
+
+            if ke is not None:
+                if not set(EXP_COLS).issubset(ke.columns):
+                    st.error("The Kharcha sheet must have these columns: " + ", ".join(EXP_COLS))
+                    return
+                have = {
+                    (str(r.date)[:10], round(float(r.amount), 2), str(r.place).strip(), str(r.note))
+                    for r in expenses_df().itertuples()
+                }
+                added = skipped = bad = 0
+                for _, r in ke.iterrows():
+                    try:
+                        amt = float(r["amount"])
+                        date.fromisoformat(str(r["date"])[:10])
+                        pl = str(r["place"]).strip()
+                        if amt <= 0 or not pl:
+                            raise ValueError
+                    except (ValueError, TypeError):
+                        bad += 1
+                        continue
+                    key = (str(r["date"])[:10], round(amt, 2), pl, str(r["note"]))
+                    if key in have:
+                        skipped += 1
+                        continue
+                    run(
+                        "INSERT INTO expenses(edate, amount, place, category, note) VALUES (?,?,?,?,?)",
+                        (key[0], amt, pl, str(r["category"]).strip() or "Other", key[3]),
+                    )
+                    have.add(key)
+                    added += 1
+                msgs.append(f"Kharcha: {added} added, {skipped} already present, {bad} invalid rows skipped.")
 
             if lo is not None:
                 if not set(LOAN_COLS).issubset(lo.columns):
@@ -1392,6 +1570,42 @@ def loan_total_note(loan):
     )
 
 
+def edit_expenses():
+    df = expenses_df()
+    if df.empty:
+        st.info("No kharcha entries yet.")
+        return
+    df = df.sort_values(["date", "id"], ascending=False)
+    labels = {
+        int(r["id"]): f"{r['date']} | {r['place']} | {r['category']} | {inr(r['amount'])}"
+        for _, r in df.iterrows()
+    }
+    rid = st.selectbox("Select kharcha entry", list(labels), format_func=labels.get, key="edit_exp_pick")
+    r = df[df["id"] == rid].iloc[0]
+    cats = EXPENSE_CATS if r["category"] in EXPENSE_CATS else EXPENSE_CATS + [r["category"]]
+    with st.form(f"edit_exp_{rid}"):
+        place = st.text_input("Kahan kharch kiya", value=r["place"])
+        cat = st.selectbox("Category", cats, index=cats.index(r["category"]))
+        a, b = st.columns(2)
+        amount = a.number_input("Amount (₹)", min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
+        edate = b.date_input("Date", value=_d(r["date"]))
+        note = st.text_input("Note (optional)", value=r["note"] or "")
+        ok = st.form_submit_button("Save changes", type="primary", use_container_width=True)
+    if ok:
+        if not place.strip():
+            st.error("Place cannot be empty.")
+        elif amount <= 0:
+            st.error("Amount must be greater than 0.")
+        else:
+            run(
+                "UPDATE expenses SET edate=?, amount=?, place=?, category=?, note=? WHERE id=?",
+                (edate.isoformat(), float(amount), place.strip(), cat, note.strip(), int(rid)),
+            )
+            st.session_state["flash"] = "Kharcha updated."
+            st.rerun()
+    delete_block("expenses", rid, "exp")
+
+
 def edit_loans():
     df = loans_df()
     if df.empty:
@@ -1498,6 +1712,11 @@ def all_transactions():
             "Date": r.date, "Group": "Income", "Type": "Income", "Party / loan": r.source,
             "Direction": "In", "Amount": float(r.amount), "Note": r.note or "",
         })
+    for r in expenses_df().itertuples():
+        rows.append({
+            "Date": r.date, "Group": "Kharcha", "Type": r.category, "Party / loan": r.place,
+            "Direction": "Out", "Amount": float(r.amount), "Note": r.note or "",
+        })
     for r in loan_pay_df().itertuples():
         rows.append({
             "Date": r.date, "Group": "Loan payments",
@@ -1515,7 +1734,7 @@ def admin_transactions():
         st.info("No transactions yet.")
         return
     f1, f2 = st.columns([1, 2])
-    group = f1.selectbox("Show", ["All", "Lending / borrowing", "Income", "Loan payments"], key="adm_group")
+    group = f1.selectbox("Show", ["All", "Lending / borrowing", "Income", "Kharcha", "Loan payments"], key="adm_group")
     q = f2.text_input("Search party, loan or note", key="adm_q")
     if group != "All":
         df = df[df["Group"] == group]
@@ -1560,6 +1779,7 @@ def page_admin():
     sections = {
         "Lending / borrowing": edit_txns,
         "Income": edit_income,
+        "Kharcha": edit_expenses,
         "Loans": edit_loans,
         "Instalment / penalty payments": edit_loan_payments,
     }
