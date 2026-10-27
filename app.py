@@ -250,6 +250,7 @@ def income_df():
 LOAN_PEN_TYPES = {
     "fixed": "Fixed (har late kist par ek baar)",
     "daily": "Per din (har din ki der par)",
+    "pct": "% bayaj har mahine (late kist par, din ke hisab se)",
 }
 
 
@@ -280,7 +281,7 @@ def loan_schedule(loan, pays, today):
     n = int(loan["total_kists"])
     first = date.fromisoformat(str(loan["first_due"])[:10])
     pen = float(loan["penalty_amount"])
-    daily = loan["penalty_type"] == "daily"
+    ptype = loan["penalty_type"]
     events, cum = [], 0.0
     for r in pays[pays["kind"] == "kist"].itertuples():
         cum += float(r.amount)
@@ -291,7 +292,14 @@ def loan_schedule(loan, pays, today):
         # i-vi kist tab bhari maani jaati hai jab ab tak ki total kist-rakam i*kist tak pahunch jaye
         paid_on = next((d for d, c in events if c >= kist * i - 0.005), None)
         late = max(((paid_on or today) - due).days, 0)
-        penalty = (pen * late if daily else pen) if late > 0 else 0.0
+        if late <= 0:
+            penalty = 0.0
+        elif ptype == "daily":
+            penalty = pen * late
+        elif ptype == "pct":
+            penalty = kist * pen / 100 * late / 30
+        else:
+            penalty = pen
         rows.append({"no": i, "due": due, "paid_on": paid_on, "late": late, "penalty": penalty})
     return rows
 
@@ -305,18 +313,11 @@ def loan_summary(loan, pays, today):
     pen_total = sum(r["penalty"] for r in rows)
     total = kist * n
     pending = max(total - paid, 0.0)
-    principal = float(loan["loan_amount"] or 0)
-    interest = max(total - principal, 0.0) if principal > 0 else None
-    share = pending / total if total else 0.0  # baaki kist ka hissa (mool aur bayaj barabar hisab se)
     return {
         "rows": rows,
         "paid": paid,
         "total": total,
         "pending": pending,
-        "principal": principal,
-        "interest": interest,
-        "pend_principal": principal * share if principal > 0 else None,
-        "pend_interest": interest * share if interest is not None else None,
         "paid_cnt": min(int((paid + 0.005) // kist), n),
         "pen_total": pen_total,
         "pen_paid": pen_paid,
@@ -448,7 +449,7 @@ def cash_section():
     k1, k2, k3 = st.columns(3)
     k1.markdown(kpi("💵 Kul income", inr(income), "ab tak ki", "g"), unsafe_allow_html=True)
     k2.markdown(
-        kpi("📤 Kul gaya", inr(gaya), "udhari diya, wapas diye, kist, penalty", "r"),
+        kpi("📤 Kul gaya", inr(gaya), "udhari diya, wapas diye, kist, bayaj/penalty", "r"),
         unsafe_allow_html=True,
     )
     k3.markdown(
@@ -458,7 +459,7 @@ def cash_section():
     )
     st.caption(
         f"Gaya: udhar diya {inr(cf['Udhar diya'].sum())} · udhar wapas diya {inr(cf['Udhar wapas diya'].sum())} · "
-        f"kist {inr(cf['Kist'].sum())} · penalty {inr(cf['Penalty'].sum())}. "
+        f"kist {inr(cf['Kist'].sum())} · bayaj/penalty {inr(cf['Penalty'].sum())}. "
         f"Aur aaya: paise wapas mile {inr(cf['Wapas mile'].sum())} · udhar liya {inr(cf['Udhar liya'].sum())}."
     )
     with st.expander("Mahine-wise hisab"):
@@ -491,28 +492,20 @@ def loan_section():
     pending = sum(i["pending"] for _, i in items)
     pen_due = sum(i["pen_due"] for _, i in items)
     n_late = sum(len(i["overdue"]) for _, i in items)
-    known = [i for _, i in items if i["pend_interest"] is not None]
-    pend_interest = sum(i["pend_interest"] for i in known)
-    pend_principal = sum(i["pend_principal"] for i in known)
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3 = st.columns(3)
     k1.markdown(
-        kpi("🏦 Loan baaki (bayaj ke sath)", inr(pending), f"{len(items)} loan", "b"),
+        kpi("🏦 Loan baaki (bayaj ke sath)", inr(pending + pen_due),
+            f"kist {inr(pending)} + bayaj/penalty {inr(pen_due)}", "b"),
         unsafe_allow_html=True,
     )
     k2.markdown(
-        kpi("💹 Isme bayaj", inr(pend_interest), f"mool {inr(pend_principal)} + bayaj",
-            "r" if pend_interest > 0.005 else "g"),
+        kpi("⚠️ Bayaj / Penalty baaki", inr(pen_due), "late kist par laga", "r" if pen_due > 0.005 else "g"),
         unsafe_allow_html=True,
     )
     k3.markdown(
-        kpi("⚠️ Penalty baaki", inr(pen_due), "late kist ki penalty", "r" if pen_due > 0.005 else "g"),
-        unsafe_allow_html=True,
-    )
-    k4.markdown(
         kpi("⏰ Late kist", str(n_late), "time par nahi bhari", "r" if n_late else "g"),
         unsafe_allow_html=True,
     )
-    st.caption(f"Penalty ke sath kul dena: {inr(pending + pen_due)}")
     st.write("")
     for start in range(0, len(items), 3):
         cols = st.columns(3)
@@ -521,7 +514,7 @@ def loan_section():
                 if i["overdue"]:
                     cls, label = "r", f"{len(i['overdue'])} kist late"
                 elif i["pending"] <= 0.005 and i["pen_due"] > 0.005:
-                    cls, label = "r", "Penalty baaki"
+                    cls, label = "r", "Bayaj baaki"
                 elif i["pending"] <= 0.005:
                     cls, label = "g", "Loan poora"
                 else:
@@ -534,7 +527,7 @@ def loan_section():
                     f'<div class="pmeta">{inr(l["kist_amount"])} × {int(l["total_kists"])} kist · {nxt_txt}</div>'
                     f'</div></div>'
                     f'<div class="pmeta" style="margin-top:8px">Baaki (bayaj ke sath)</div>'
-                    f'<div class="pamt" style="margin-top:0">{inr(i["pending"])}</div>'
+                    f'<div class="pamt" style="margin-top:0">{inr(i["pending"] + i["pen_due"])}</div>'
                     f'<span class="chip {cls}">{label}</span>'
                     f'<div class="pmeta" style="margin-top:6px">{i["paid_cnt"]}/{int(l["total_kists"])} kist bhari</div>',
                     unsafe_allow_html=True,
@@ -542,20 +535,12 @@ def loan_section():
                 if i["pen_due"] > 0.005:
                     st.markdown(
                         f'<div class="neg" style="font-weight:700;font-size:.85rem">'
-                        f'⚠️ Penalty baaki: {inr(i["pen_due"])}</div>',
+                        f'⚠️ Bayaj / Penalty baaki: {inr(i["pen_due"])}</div>',
                         unsafe_allow_html=True,
                     )
-                if i["interest"] is not None:
-                    st.caption(
-                        f"Loan {inr(i['principal'])} + bayaj {inr(i['interest'])} = kul {inr(i['total'])}"
-                    )
-                    st.caption(
-                        f"Baaki me: mool {inr(i['pend_principal'])} + bayaj {inr(i['pend_interest'])}"
-                    )
-                else:
-                    st.caption(f"Kul wapas karna: {inr(i['total'])} (bayaj ke liye loan ki rakam chahiye)")
-                if i["pen_due"] > 0.005:
-                    st.caption(f"Penalty ke sath kul dena: {inr(i['pending'] + i['pen_due'])}")
+                st.caption(
+                    f"Kist baaki {inr(i['pending'])} + bayaj/penalty {inr(i['pen_due'])}"
+                )
                 st.progress(min(i["paid"] / i["total"], 1.0) if i["total"] else 0.0)
                 with st.expander("Kist ki list"):
                     tbl = pd.DataFrame([
@@ -564,13 +549,13 @@ def loan_section():
                             "Due date": r["due"].isoformat(),
                             "Bhari": r["paid_on"].isoformat() if r["paid_on"] else "—",
                             "Der (din)": r["late"],
-                            "Penalty": r["penalty"],
+                            "Bayaj / Penalty": r["penalty"],
                         }
                         for r in i["rows"]
                     ])
                     st.dataframe(
                         tbl, hide_index=True, use_container_width=True,
-                        column_config={"Penalty": st.column_config.NumberColumn(format="₹%.2f")},
+                        column_config={"Bayaj / Penalty": st.column_config.NumberColumn(format="₹%.2f")},
                     )
 
 
@@ -715,26 +700,27 @@ def income_form():
 
 def loan_entry_form():
     mode = st.radio(
-        "Kya karna hai?", ["➕ Naya loan jodein", "💸 Kist / penalty bhari"],
+        "Kya karna hai?", ["➕ Naya loan jodein", "💸 Kist / bayaj bhari"],
         horizontal=True, key="loan_mode",
     )
     if mode.startswith("➕"):
-        # form ke bahar, taaki penalty ka label turant badle
+        # form ke bahar, taaki bayaj ka label turant badle
         ptype = st.radio(
-            "Late kist par penalty kaise lagti hai?", list(LOAN_PEN_TYPES.values()),
+            "Late kist par bayaj / penalty kaise lagti hai?", list(LOAN_PEN_TYPES.values()),
             horizontal=True, key="loan_pen_type",
         )
-        daily = ptype == LOAN_PEN_TYPES["daily"]
+        pkey = next(k for k, v in LOAN_PEN_TYPES.items() if v == ptype)
         with st.form("loan_new", clear_on_submit=True):
             name = st.text_input("Loan ka naam", placeholder="jaise: Bank loan / Ramesh se liya")
             a, b, c = st.columns(3)
-            loan_amount = a.number_input("Loan ki rakam (₹)", min_value=0.0, step=1000.0, format="%.2f")
+            loan_amount = a.number_input("Loan ki rakam (₹, optional)", min_value=0.0, step=1000.0, format="%.2f")
             kist = b.number_input("Ek kist (₹)", min_value=0.0, step=100.0, format="%.2f")
             n = c.number_input("Kul kitni kist", min_value=1, value=12, step=1)
             d, e = st.columns(2)
             pen = d.number_input(
-                "Penalty (₹ per din)" if daily else "Penalty (₹ har late kist par)",
-                min_value=0.0, step=10.0, format="%.2f",
+                {"daily": "Bayaj / penalty (₹ per din)",
+                 "pct": "Bayaj (% har mahine)"}.get(pkey, "Bayaj / penalty (₹ har late kist par)"),
+                min_value=0.0, step=0.5 if pkey == "pct" else 10.0, format="%.2f",
             )
             first = e.date_input("Pehli kist ki due date", value=date.today())
             note = st.text_input("Note (optional)", placeholder="jaise: bike loan / mahine ki 5 tarikh")
@@ -743,12 +729,8 @@ def loan_entry_form():
             name = name.strip()
             if not name:
                 st.error("Loan ka naam likhiye.")
-            elif loan_amount <= 0:
-                st.error("Loan ki rakam likhiye (bayaj nikalne ke liye zaroori hai).")
             elif kist <= 0:
                 st.error("Ek kist ki rakam 0 se zyada honi chahiye.")
-            elif kist * n < loan_amount:
-                st.error("Kul kist (kist × kitni kist) loan ki rakam se kam hai, rakam check kijiye.")
             elif not query_df("SELECT 1 FROM loans WHERE name = ? COLLATE NOCASE", (name,)).empty:
                 st.error("Is naam ka loan pehle se hai, doosra naam chuniye.")
             else:
@@ -756,11 +738,10 @@ def loan_entry_form():
                     "INSERT INTO loans(name, loan_amount, kist_amount, total_kists, first_due, "
                     "penalty_type, penalty_amount, note) VALUES (?,?,?,?,?,?,?,?)",
                     (name, float(loan_amount), float(kist), int(n), first.isoformat(),
-                     "daily" if daily else "fixed", float(pen), note.strip()),
+                     pkey, float(pen), note.strip()),
                 )
                 st.success(
-                    f"✅ '{name}' loan save ho gaya: {int(n)} kist × {inr(kist)} = {inr(kist * n)}. "
-                    f"Loan {inr(loan_amount)} par kul bayaj {inr(kist * n - loan_amount)}."
+                    f"✅ '{name}' loan save ho gaya: {int(n)} kist × {inr(kist)} = {inr(kist * n)}."
                 )
                 st.toast("Loan save ho gaya", icon="✅")
         return
@@ -775,14 +756,14 @@ def loan_entry_form():
     inf = loan_summary(l, pays[pays["loan_id"] == l["id"]], date.today())
     nxt = inf["next"]
     st.caption(
-        f"Baaki kist rakam: {inr(inf['pending'])} · Penalty baaki: {inr(inf['pen_due'])}"
+        f"Baaki kist: {inr(inf['pending'])} · Bayaj / penalty baaki: {inr(inf['pen_due'])}"
         + (f" · Agli kist: {nxt['due'].strftime('%d %b %Y')}" if nxt else " · Saari kist ho gayi")
     )
     if inf["overdue"]:
-        st.warning(f"{len(inf['overdue'])} kist late hai. Ab tak ki penalty: {inr(inf['pen_total'])}")
+        st.warning(f"{len(inf['overdue'])} kist late hai. Ab tak ka bayaj / penalty: {inr(inf['pen_total'])}")
 
     with st.form("loan_pay", clear_on_submit=True):
-        kind = st.radio("Kya bhara?", ["Kist", "Penalty"], horizontal=True)
+        kind = st.radio("Kya bhara?", ["Kist", "Bayaj / Penalty"], horizontal=True)
         a, b = st.columns(2)
         amount = a.number_input(
             "Rakam (₹)", min_value=0.0, value=float(l["kist_amount"]), step=100.0,
@@ -797,9 +778,9 @@ def loan_entry_form():
         else:
             run(
                 "INSERT INTO loan_payments(loan_id, pdate, kind, amount, note) VALUES (?,?,?,?,?)",
-                (int(l["id"]), pdate.isoformat(), kind.lower(), float(amount), note.strip()),
+                (int(l["id"]), pdate.isoformat(), "kist" if kind == "Kist" else "penalty", float(amount), note.strip()),
             )
-            st.success(f"✅ {pick}: {kind.lower()} {inr(amount)} save ho gayi.")
+            st.success(f"✅ {pick}: {kind} {inr(amount)} save ho gayi.")
             st.toast("Save ho gaya", icon="✅")
             show_cash_left()
 
@@ -959,18 +940,18 @@ def template_xlsx():
         ("", False),
         ("Loan sheet (ek loan = ek row)", True),
         ("name           -> loan ka naam (har loan ka alag naam)", False),
-        ("loan_amount    -> loan ki rakam (bayaj nikalne ke liye zaroori)", False),
+        ("loan_amount    -> loan ki rakam (optional, khali ya 0 chalega)", False),
         ("kist_amount    -> ek kist ki rakam, 0 se zyada", False),
         ("total_kists    -> kul kitni kist", False),
         ("first_due      -> pehli kist ki due date (baaki har mahine usi tarikh ko)", False),
-        ("penalty_type   -> fixed = har late kist par ek baar, daily = har din ki der par", False),
-        ("penalty_amount -> penalty ki rakam (fixed ho to ek baar ki, daily ho to ek din ki)", False),
+        ("penalty_type   -> fixed = har late kist par ek baar, daily = har din ki der par, pct = % bayaj har mahine", False),
+        ("penalty_amount -> bayaj/penalty (fixed: ek baar ki rakam, daily: ek din ki rakam, pct: % har mahine)", False),
         ("note           -> optional", False),
         ("", False),
         ("Kist_Penalty sheet (loan me bhari gayi kist ya penalty)", True),
         ("loan   -> wahi naam jo Loan sheet me hai (pehle se app me ho to bhi chalega)", False),
         ("date   -> kis tarikh ko bhari", False),
-        ("kind   -> kist ya penalty", False),
+        ("kind   -> kist ya penalty (penalty = bayaj/penalty ki rakam)", False),
         ("amount -> rakam", False),
         ("note   -> optional", False),
         ("", False),
