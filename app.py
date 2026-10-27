@@ -1556,9 +1556,21 @@ def site_lang():
     return st.session_state.get("_lang", "en")
 
 
-def _tr_fetch(text, lang):
+def _tr_fetch(text, lang, tries=5):
     from deep_translator import GoogleTranslator
-    return GoogleTranslator(source="auto", target=lang).translate(text)
+    last = None
+    for i in range(tries):
+        try:
+            return GoogleTranslator(source="auto", target=lang).translate(text)
+        except Exception as exc:
+            last = exc
+            msg = str(exc).lower()
+            # retry only on rate limiting / temporary errors
+            if "too many" in msg or "429" in msg or "timed out" in msg or "server error" in msg:
+                time.sleep(4 * (2 ** i))  # 4s, 8s, 16s, 32s, 64s
+                continue
+            raise
+    raise last
 
 
 def _tr_save(lang, pairs):
@@ -1585,7 +1597,7 @@ def _tr_batch(cores, lang, progress=None):
         if "\n" in c:
             groups.append([c])
             continue
-        if cur and (size + len(c) > 3500 or len(cur) >= 40):
+        if cur and (size + len(c) > 1500 or len(cur) >= 20):
             groups.append(cur)
             cur, size = [], 0
         cur.append(c)
@@ -1601,11 +1613,11 @@ def _tr_batch(cores, lang, progress=None):
             _tr_save(lang, [(c, p.strip()) for c, p in zip(grp, parts)])
         else:  # lines got merged or split: do this group one by one, slowly
             for c in grp:
-                time.sleep(0.4)
+                time.sleep(1.2)
                 _tr_save(lang, [(c, (_tr_fetch(c, lang) or "").strip())])
         if progress:
             progress((gi + 1) / len(groups))
-        time.sleep(0.5)
+        time.sleep(1.5)
 
 
 def _tr_resolve(cores, lang):
@@ -1732,14 +1744,22 @@ def admin_translate():
     if a.button("Apply and lock language", type="primary", use_container_width=True):
         if LANGS[pick] != "en":
             bar = st.progress(0.0, text="Translating the site text, please wait...")
-            try:
-                prewarm_language(LANGS[pick], lambda f: bar.progress(f, text="Translating the site text, please wait..."))
-            except Exception as exc:
+            ok, err = False, ""
+            for attempt in range(4):
+                try:
+                    prewarm_language(
+                        LANGS[pick],
+                        lambda f, a=attempt: bar.progress(f, text=f"Translating the site text (round {a + 1}/4)..."),
+                    )
+                    ok = True
+                    break
+                except Exception as exc:
+                    err = str(exc)[:200]
+                    bar.progress(0.0, text=f"Google asked us to slow down, waiting 30s (round {attempt + 1}/4)...")
+                    time.sleep(30)
+            if not ok:
                 bar.empty()
-                st.error(
-                    f"Translation could not finish: {str(exc)[:200]}. "
-                    "Wait a minute and press Apply again; the part already translated is kept."
-                )
+                st.error(f"Translation could not finish: {err}. Press Apply again; the part already translated is kept.")
                 return
         set_setting("site_lang", LANGS[pick])
         st.session_state["flash"] = f"Site language is now {pick}."
