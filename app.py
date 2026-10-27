@@ -175,6 +175,13 @@ def init_db():
                 amount REAL NOT NULL CHECK(amount > 0),
                 note TEXT DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS income(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                idate TEXT NOT NULL,
+                amount REAL NOT NULL CHECK(amount > 0),
+                source TEXT DEFAULT '',
+                note TEXT DEFAULT ''
+            );
             """
         )
         c.commit()
@@ -202,6 +209,12 @@ def txns_df():
         "ORDER BY t.tdate, t.id"
     )
     df["signed"] = df["amount"] * df["kind"].map(KINDS)
+    return df
+
+
+def income_df():
+    df = query_df("SELECT id, idate AS date, amount, source, note FROM income ORDER BY idate, id")
+    df["month"] = df["date"].str[:7]
     return df
 
 
@@ -272,7 +285,8 @@ def party_card(r, key):
 def page_dashboard():
     hero("📒 Udhari Khata", f"Aaj {date.today().strftime('%d %b %Y')} · aapka poora hisab ek nazar me")
     df = txns_df()
-    if df.empty:
+    inc = income_df()
+    if df.empty and inc.empty:
         st.info("Abhi koi entry nahi hai. Shuru karne ke liye 'Nayi Entry' par jaiye.")
         st.button("➕ Pehli entry daalein", on_click=go, args=(P_NEW,), type="primary")
         return
@@ -283,11 +297,16 @@ def page_dashboard():
     n_mil = int((s["balance"] > 0).sum())
     n_den = int((s["balance"] < 0).sum())
 
-    c1, c2, c3 = st.columns(3)
+    this_month = inc.loc[inc["month"] == date.today().strftime("%Y-%m"), "amount"].sum()
+    c1, c2, c3, c4 = st.columns(4)
     c1.markdown(kpi("💰 Aapko milna hai", inr(milna), f"{n_mil} logon se", "g"), unsafe_allow_html=True)
     c2.markdown(kpi("🧾 Aapko dena hai", inr(dena), f"{n_den} logon ko", "r"), unsafe_allow_html=True)
     c3.markdown(
         kpi("⚖️ Net balance", inr(milna - dena), "milna − dena", "b"), unsafe_allow_html=True
+    )
+    c4.markdown(
+        kpi("💵 Is mahine ki income", inr(this_month), date.today().strftime("%B %Y"), "g"),
+        unsafe_allow_html=True,
     )
     st.write("")
 
@@ -329,6 +348,23 @@ def page_dashboard():
                 unsafe_allow_html=True,
             )
 
+    if not inc.empty:
+        st.subheader("Mahine-wise income")
+        monthly = inc.groupby("month")["amount"].sum().reset_index().tail(12)
+        ichart = (
+            alt.Chart(monthly)
+            .mark_bar(cornerRadiusEnd=6, color=GREEN)
+            .encode(
+                x=alt.X("month:N", title=None, sort=None),
+                y=alt.Y("amount:Q", title="Rakam (₹)"),
+                tooltip=[alt.Tooltip("month:N", title="Mahina"),
+                         alt.Tooltip("amount:Q", title="Income", format=",.2f")],
+            )
+            .properties(height=220)
+        )
+        st.altair_chart(ichart, use_container_width=True)
+        st.caption(f"Ab tak ki total income: {inr(inc['amount'].sum())} · {len(inc)} entries")
+
     st.subheader("Saari parties")
     f1, f2 = st.columns([2, 1])
     q = f1.text_input("🔍 Naam se dhundhiye", placeholder="Naam likhiye...", label_visibility="collapsed")
@@ -354,8 +390,35 @@ def page_dashboard():
                 party_card(r, key=f"open_{r['id']}")
 
 
+def income_form():
+    with st.form("income_form", clear_on_submit=True):
+        a, b, c = st.columns(3)
+        amount = a.number_input("Income (₹)", min_value=0.0, step=500.0, format="%.2f")
+        idate = b.date_input("Kis tarikh ko mili", value=date.today())
+        source = c.text_input("Kahan se (optional)", placeholder="jaise: Salary / Dukaan / Bonus")
+        note = st.text_input("Note (optional)", placeholder="jaise: overtime / commission")
+        ok = st.form_submit_button("💾 Income save karein", type="primary", use_container_width=True)
+    if ok:
+        if amount <= 0:
+            st.error("Rakam 0 se zyada honi chahiye.")
+        else:
+            run(
+                "INSERT INTO income(idate, amount, source, note) VALUES (?,?,?,?)",
+                (idate.isoformat(), float(amount), source.strip(), note.strip()),
+            )
+            st.success(f"✅ {inr(amount)} ki income save ho gayi.")
+            st.toast("Income save ho gayi", icon="✅")
+
+
 def page_new_entry():
-    hero("➕ Nayi Entry", "Len-den ka hisab kuch hi second me likhiye")
+    hero("➕ Nayi Entry", "Len-den ya income ka hisab kuch hi second me likhiye")
+    typ = st.radio(
+        "Entry ka type", ["📒 Udhari / Len-den", "💰 Income (kamai)"],
+        horizontal=True, key="entry_type",
+    )
+    if typ.startswith("💰"):
+        income_form()
+        return
     parties = parties_df()
     pre = st.session_state.pop("prefill_party", None)
     options = ["-- nayi party --"] + parties["name"].tolist()
@@ -442,6 +505,38 @@ def page_backup():
                 seen.add(key)
                 added += 1
             st.success(f"{added} entries jodi gayi, {skipped} pehle se maujood thi (duplicate nahi banayi).")
+
+    st.divider()
+    inc = income_df()
+    i1, i2 = st.columns(2)
+    with i1:
+        st.markdown("#### 💵 Income backup")
+        st.caption(f"{len(inc)} income entries")
+        st.download_button(
+            "Income CSV backup",
+            inc[["date", "amount", "source", "note"]].to_csv(index=False).encode("utf-8"),
+            file_name=f"income_backup_{date.today().isoformat()}.csv",
+            mime="text/csv", disabled=inc.empty,
+        )
+    with i2:
+        st.markdown("#### 💵 Income restore")
+        iup = st.file_uploader("Income CSV chuniye", type="csv", key="inc_up", label_visibility="collapsed")
+        if iup is not None and st.button("Income restore karein"):
+            d = pd.read_csv(iup).fillna("")
+            if not {"date", "amount", "source", "note"}.issubset(d.columns):
+                st.error("CSV me ye columns hone chahiye: date, amount, source, note")
+            else:
+                have = {(str(r.date), round(float(r.amount), 2), str(r.source), str(r.note)) for r in inc.itertuples()}
+                added = 0
+                for _, r in d.iterrows():
+                    key = (str(r["date"]), round(float(r["amount"]), 2), str(r["source"]), str(r["note"]))
+                    if key in have:
+                        continue
+                    run("INSERT INTO income(idate, amount, source, note) VALUES (?,?,?,?)",
+                        (key[0], float(r["amount"]), key[2], key[3]))
+                    have.add(key)
+                    added += 1
+                st.success(f"{added} income entries jodi gayi.")
 
 
 # ---------------------------------------------------------------- main
