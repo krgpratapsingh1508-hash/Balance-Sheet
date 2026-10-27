@@ -855,8 +855,45 @@ def template_xlsx():
     return buf.getvalue()
 
 
+def wipe_all_data():
+    """Saari tables ka poora data hata deta hai (ids bhi shuru se)."""
+    with closing(sqlite3.connect(DB_PATH)) as c:
+        c.execute("PRAGMA foreign_keys = ON")
+        for t in ("loan_payments", "loans", "txns", "parties", "income"):
+            c.execute(f"DELETE FROM {t}")
+        c.execute("DELETE FROM sqlite_sequence")
+        c.commit()
+
+
+def wipe_callback():
+    wipe_all_data()
+    st.session_state["wipe_sure"] = False
+    st.session_state["wipe_word"] = ""
+    st.session_state["wiped"] = True
+
+
+def wipe_section(counts):
+    st.divider()
+    st.markdown("#### 🗑️ Saara data delete karein")
+    st.caption(counts)
+    with st.expander("Khatarnak: poora data mitane ke liye kholiye"):
+        st.error(
+            "Ye udhari, parties, income, loan aur kist ka **poora data hamesha ke liye** hata dega. "
+            "Wapas nahi aayega. Pehle upar se Excel backup download kar lijiye."
+        )
+        sure = st.checkbox("Haan, mujhe pata hai ki saara data delete ho jayega", key="wipe_sure")
+        word = st.text_input("Confirm ke liye DELETE likhiye", key="wipe_word", placeholder="DELETE")
+        st.button(
+            "🗑️ Saara data delete karein", type="primary",
+            disabled=not (sure and word.strip().upper() == "DELETE"),
+            on_click=wipe_callback,
+        )
+
+
 def page_backup():
     hero("💾 Backup / Restore", "Apna data surakshit rakhiye")
+    if st.session_state.pop("wiped", False):
+        st.success("✅ Saara data delete ho gaya.")
     st.warning(
         "Streamlit Cloud par app restart hone par database file mit sakti hai. "
         "Isliye time-time par Excel backup download kar lijiye."
@@ -873,6 +910,13 @@ def page_backup():
     empty = export.empty and inc_export.empty and loan_export.empty
 
     c1, c2 = st.columns(2)
+    # restore me error aane par bhi ye hissa dikhta rahe, isliye pehle hi bana liya
+    wipe_box = st.container()
+    with wipe_box:
+        wipe_section(
+            f"Abhi: {len(export)} udhari entries, {len(phones)} parties, "
+            f"{len(inc_export)} income entries, {len(loan_export)} loan, {len(pay_export)} kist/penalty"
+        )
     with c1:
         st.markdown("#### ⬇️ Backup lein")
         st.caption(
