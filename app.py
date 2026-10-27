@@ -29,6 +29,11 @@ KIND_ICON = {
     "Maine paise wapas diye": "💸",
 }
 
+INCOME_SOURCES = [
+    "Salary", "Dukaan / Business", "Bonus", "Overtime", "Commission",
+    "Kiraya", "Interest", "Gift / Tohfa", "Other",
+]
+
 GREEN = "#16a34a"
 RED = "#dc2626"
 BLUE = "#4f46e5"
@@ -395,16 +400,20 @@ def income_form():
         a, b, c = st.columns(3)
         amount = a.number_input("Income (₹)", min_value=0.0, step=500.0, format="%.2f")
         idate = b.date_input("Kis tarikh ko mili", value=date.today())
-        source = c.text_input("Kahan se (optional)", placeholder="jaise: Salary / Dukaan / Bonus")
+        source = c.selectbox("Kahan se", INCOME_SOURCES)
+        other = st.text_input("Agar 'Other' chuna to yahan likhiye", placeholder="jaise: Tuition / Freelance")
         note = st.text_input("Note (optional)", placeholder="jaise: overtime / commission")
         ok = st.form_submit_button("💾 Income save karein", type="primary", use_container_width=True)
     if ok:
+        final_source = other.strip() if source == "Other" else source
         if amount <= 0:
             st.error("Rakam 0 se zyada honi chahiye.")
+        elif not final_source:
+            st.error("'Other' chuna hai to 'kahan se' likhna zaroori hai.")
         else:
             run(
                 "INSERT INTO income(idate, amount, source, note) VALUES (?,?,?,?)",
-                (idate.isoformat(), float(amount), source.strip(), note.strip()),
+                (idate.isoformat(), float(amount), final_source, note.strip()),
             )
             st.success(f"✅ {inr(amount)} ki income save ho gayi.")
             st.toast("Income save ho gayi", icon="✅")
