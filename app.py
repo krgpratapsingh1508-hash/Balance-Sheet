@@ -502,6 +502,77 @@ def read_backup_all(f):
     }
 
 
+def template_xlsx():
+    """Restore ke liye khali Excel format (headers + dropdown + kaise bhare ki guide)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    wb = Workbook()
+    head_fill = PatternFill("solid", fgColor="4F46E5")
+    head_font = Font(bold=True, color="FFFFFF")
+
+    def make(ws, cols, widths):
+        ws.append(cols)
+        for i, w in enumerate(widths, start=1):
+            c = ws.cell(row=1, column=i)
+            c.fill, c.font = head_fill, head_font
+            ws.column_dimensions[c.column_letter].width = w
+        ws.freeze_panes = "A2"
+        for r in range(2, 1002):  # tarikh ko text rakho, taaki Excel format na badle
+            ws.cell(row=r, column=cols.index("date") + 1).number_format = "@"
+
+    ws1 = wb.active
+    ws1.title = "Udhari"
+    make(ws1, ["party", "date", "kind", "amount", "note"], [24, 14, 28, 14, 36])
+    dv = DataValidation(type="list", formula1='"' + ",".join(KINDS) + '"', allow_blank=True)
+    dv.error, dv.errorTitle = "Dropdown se chuniye", "Galat kism"
+    ws1.add_data_validation(dv)
+    dv.add("C2:C1000")
+
+    ws2 = wb.create_sheet("Income")
+    make(ws2, ["date", "amount", "source", "note"], [14, 14, 24, 36])
+    dv2 = DataValidation(type="list", formula1='"' + ",".join(INCOME_SOURCES[:-1]) + '"',
+                         allow_blank=True, showErrorMessage=False)
+    ws2.add_data_validation(dv2)
+    dv2.add("C2:C1000")
+
+    ws3 = wb.create_sheet("Kaise bhare")
+    lines = [
+        ("Restore ke liye Excel kaise bhare", True),
+        ("", False),
+        ("1. 'Udhari' sheet me udhari ki entries, 'Income' sheet me income ki entries bhariye.", False),
+        ("2. Pehli row (heading) ko mat badliye, uske neeche se data likhna shuru kijiye.", False),
+        ("3. Dono sheet zaroori nahi - sirf jis sheet me data hai wahi judega.", False),
+        ("4. Is 'Kaise bhare' sheet ko rakhein ya hata dein, koi farak nahi padta.", False),
+        ("", False),
+        ("Udhari sheet ke columns", True),
+        ("party  -> samne wale ka naam (nayi party ho to apne aap ban jayegi)", False),
+        ("date   -> tarikh YYYY-MM-DD me, jaise 2026-10-27", False),
+        ("kind   -> dropdown se chuniye (neeche ke 4 me se ek):", False),
+    ] + [("          - " + k, False) for k in KINDS] + [
+        ("amount -> rakam, 0 se zyada, jaise 1500 ya 250.50", False),
+        ("note   -> optional, khali chhod sakte hain", False),
+        ("", False),
+        ("Income sheet ke columns", True),
+        ("date   -> tarikh YYYY-MM-DD me", False),
+        ("amount -> rakam, 0 se zyada", False),
+        ("source -> kahan se (jaise Salary, Bonus, Kiraya ya apna likha hua naam)", False),
+        ("note   -> optional", False),
+        ("", False),
+        ("Duplicate entries (same party, date, kism, rakam, note) dobara nahi judti.", False),
+    ]
+    for text, bold in lines:
+        ws3.append([text])
+        ws3.cell(row=ws3.max_row, column=1).font = Font(bold=bold, size=12 if bold else 11)
+        ws3.cell(row=ws3.max_row, column=1).alignment = Alignment(wrap_text=False)
+    ws3.column_dimensions["A"].width = 95
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def page_backup():
     hero("💾 Backup / Restore", "Apna data surakshit rakhiye")
     st.warning(
@@ -527,6 +598,13 @@ def page_backup():
         )
     with c2:
         st.markdown("#### ⬆️ Restore karein")
+        st.download_button(
+            "📄 Restore ka format download karein (khali Excel)",
+            template_xlsx(),
+            file_name="udhari_restore_format.xlsx",
+            mime=XLSX_MIME,
+            help="Isme data bharkar neeche upload karein. Andar 'Kaise bhare' sheet me poori guide hai.",
+        )
         up = st.file_uploader("Backup Excel chuniye", type=["xlsx", "csv"], label_visibility="collapsed")
         if up is not None and st.button("Restore karein"):
             sheets = read_backup_all(up)
@@ -609,4 +687,4 @@ def main():
     }[st.session_state["page"]]()
 
 
-main()
+main()q
