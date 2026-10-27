@@ -1,5 +1,6 @@
-"""Udhari Khata v2 - paise ke len-den aur udhari ka hisab rakhne wala Streamlit app.
-Sirf 3 pages: Dashboard, Nayi Entry, Backup / Restore.
+"""Udhari Khata - personal ledger for lending, borrowing, income and loan instalments.
+
+Three pages: Dashboard, New entry, Backup & restore.
 """
 
 import calendar
@@ -17,89 +18,110 @@ import streamlit as st
 
 DB_PATH = Path(__file__).with_name("udhari.db")
 
-# +1 = samne wale se aapko milna badha, -1 = kam hua
+# +1 increases the amount receivable from the party, -1 reduces it.
 KINDS = {
-    "Maine udhar diya": 1,
-    "Mujhe paise wapas mile": -1,
-    "Maine udhar liya": -1,
-    "Maine paise wapas diye": 1,
+    "Money lent": 1,
+    "Repayment received": -1,
+    "Money borrowed": -1,
+    "Repayment made": 1,
 }
-KIND_ICON = {
-    "Maine udhar diya": "📤",
-    "Mujhe paise wapas mile": "📥",
-    "Maine udhar liya": "🤝",
-    "Maine paise wapas diye": "💸",
+# Older versions stored Hinglish labels. They are converted on startup and on restore.
+LEGACY_KINDS = {
+    "Maine udhar diya": "Money lent",
+    "Mujhe paise wapas mile": "Repayment received",
+    "Maine udhar liya": "Money borrowed",
+    "Maine paise wapas diye": "Repayment made",
 }
 
 INCOME_SOURCES = [
-    "Salary", "Dukaan / Business", "Bonus", "Overtime", "Commission",
-    "Kiraya", "Interest", "Gift / Tohfa", "Other",
+    "Salary", "Business", "Bonus", "Overtime", "Commission",
+    "Rent", "Interest", "Gift", "Other",
 ]
 
-GREEN = "#16a34a"
-RED = "#dc2626"
-BLUE = "#4f46e5"
+GREEN = "#1e7a4f"
+RED = "#b4372f"
+BLUE = "#0f3d4c"
 
-P_DASH = "🏠  Dashboard"
-P_NEW = "➕  Nayi Entry"
-P_BACKUP = "💾  Backup / Restore"
+P_DASH = "Dashboard"
+P_NEW = "New entry"
+P_BACKUP = "Backup & restore"
 PAGES = [P_DASH, P_NEW, P_BACKUP]
 
 st.set_page_config(page_title="Udhari Khata", page_icon="📒", layout="wide")
 
-CSS = f"""
+CSS = """
 <style>
-.block-container {{ padding-top: 1.6rem; max-width: 1200px; }}
-#MainMenu, footer {{ visibility: hidden; }}
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:wght@600;700&display=swap');
 
-.hero {{
-    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 55%, #db2777 100%);
-    color: #fff; border-radius: 22px; padding: 26px 30px; margin-bottom: 18px;
-    box-shadow: 0 10px 30px rgba(79,70,229,.28);
-}}
-.hero h1 {{ margin: 0; font-size: 1.9rem; color: #fff; padding: 0; }}
-.hero p {{ margin: 4px 0 0; opacity: .88; font-size: .98rem; }}
+.stApp { font-family: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif; }
+h1, h2, h3, h4 {
+    font-family: 'Source Serif 4', Georgia, serif !important;
+    font-weight: 600 !important; letter-spacing: -0.01em; color: #14202b;
+}
+.block-container { padding-top: 1.4rem; max-width: 1180px; }
+#MainMenu, footer { visibility: hidden; }
 
-.kpi {{
-    border-radius: 18px; padding: 18px 20px; border: 1px solid rgba(128,128,128,.18);
-    background: rgba(128,128,128,.06); height: 100%;
-}}
-.kpi .lbl {{ font-size: .85rem; opacity: .75; font-weight: 600; letter-spacing: .02em; }}
-.kpi .val {{ font-size: 1.85rem; font-weight: 800; margin-top: 4px; line-height: 1.2; }}
-.kpi .sub {{ font-size: .8rem; opacity: .65; margin-top: 2px; }}
-.kpi.g {{ border-left: 6px solid {GREEN}; }} .kpi.g .val {{ color: {GREEN}; }}
-.kpi.r {{ border-left: 6px solid {RED}; }}   .kpi.r .val {{ color: {RED}; }}
-.kpi.b {{ border-left: 6px solid {BLUE}; }}  .kpi.b .val {{ color: {BLUE}; }}
+/* Page header: flat navy band closed by an accountant's double rule */
+.hero {
+    background: #0f3d4c; color: #fff; border-radius: 6px;
+    padding: 22px 28px 20px; margin-bottom: 22px;
+    border-bottom: 5px double rgba(255,255,255,.55);
+}
+.hero h1 { margin: 0; padding: 0; font-size: 1.7rem; color: #fff !important; }
+.hero p { margin: 6px 0 0; color: rgba(255,255,255,.78); font-size: .95rem; }
 
-.pcard-top {{ display: flex; align-items: center; gap: 12px; }}
-.avatar {{
-    width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center;
-    justify-content: center; color: #fff; font-weight: 800; font-size: 1.1rem; flex: none;
-}}
-.pname {{ font-weight: 700; font-size: 1.02rem; line-height: 1.2; }}
-.pmeta {{ font-size: .78rem; opacity: .6; }}
-.pamt {{ font-size: 1.45rem; font-weight: 800; margin: 10px 0 4px; }}
-.chip {{
-    display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: .75rem;
-    font-weight: 700;
-}}
-.chip.g {{ background: rgba(22,163,74,.14); color: {GREEN}; }}
-.chip.r {{ background: rgba(220,38,38,.14); color: {RED}; }}
-.chip.z {{ background: rgba(128,128,128,.18); opacity: .85; }}
+/* Key figures */
+.kpi {
+    border-radius: 6px; padding: 16px 18px 14px; height: 100%;
+    background: #f6f8f9; border: 1px solid #d9dfe4; border-top: 3px solid #5b6975;
+}
+.kpi .lbl { font-size: .82rem; color: #5b6975; font-weight: 500; }
+.kpi .val {
+    font-family: 'Source Serif 4', Georgia, serif; font-size: 1.75rem; font-weight: 700;
+    margin-top: 4px; line-height: 1.2; font-variant-numeric: tabular-nums;
+}
+.kpi .sub { font-size: .78rem; color: #5b6975; margin-top: 3px; }
+.kpi.g { border-top-color: #1e7a4f; } .kpi.g .val { color: #1e7a4f; }
+.kpi.r { border-top-color: #b4372f; } .kpi.r .val { color: #b4372f; }
+.kpi.b { border-top-color: #0f3d4c; } .kpi.b .val { color: #0f3d4c; }
 
-.act {{
+/* Party and loan cards */
+.pcard-top { display: flex; align-items: center; gap: 12px; }
+.avatar {
+    width: 40px; height: 40px; border-radius: 8px; display: flex; align-items: center;
+    justify-content: center; color: #fff; font-weight: 600; font-size: 1.05rem; flex: none;
+}
+.pname { font-weight: 600; font-size: 1rem; line-height: 1.25; }
+.pmeta { font-size: .78rem; color: #5b6975; }
+.pamt {
+    font-family: 'Source Serif 4', Georgia, serif; font-size: 1.45rem; font-weight: 700;
+    margin: 10px 0 6px; font-variant-numeric: tabular-nums;
+}
+.chip {
+    display: inline-block; padding: 2px 9px; border-radius: 4px; font-size: .75rem;
+    font-weight: 600;
+}
+.chip.g { background: #e3f1ea; color: #1e7a4f; }
+.chip.r { background: #f6e4e2; color: #b4372f; }
+.chip.z { background: #e7ebee; color: #5b6975; }
+
+/* Recent activity: ruled rows instead of cards */
+.act {
     display: flex; justify-content: space-between; align-items: center; gap: 10px;
-    padding: 10px 14px; border-radius: 14px; margin-bottom: 8px;
-    background: rgba(128,128,128,.06); border: 1px solid rgba(128,128,128,.12);
-}}
-.act .l {{ font-size: .92rem; font-weight: 600; }}
-.act .s {{ font-size: .76rem; opacity: .6; }}
-.act .a {{ font-weight: 800; white-space: nowrap; }}
-.pos {{ color: {GREEN}; }} .neg {{ color: {RED}; }}
+    padding: 10px 2px; border-bottom: 1px solid #d9dfe4;
+}
+.act .l { font-size: .92rem; font-weight: 600; }
+.act .s { font-size: .76rem; color: #5b6975; }
+.act .a { font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pos { color: #1e7a4f; } .neg { color: #b4372f; }
 
-section[data-testid="stSidebar"] .brand {{ font-size: 1.35rem; font-weight: 800; margin-bottom: 4px; }}
-div[data-testid="stForm"] {{ border-radius: 18px; }}
-.stButton > button, .stDownloadButton > button {{ border-radius: 12px; font-weight: 600; }}
+section[data-testid="stSidebar"] .brand {
+    font-family: 'Source Serif 4', Georgia, serif; font-size: 1.4rem; font-weight: 700;
+    color: #0f3d4c; margin-bottom: 2px;
+}
+div[data-testid="stForm"] { border-radius: 6px; }
+.stButton > button, .stDownloadButton > button { border-radius: 4px; font-weight: 500; }
+:focus-visible { outline: 2px solid #0f3d4c; outline-offset: 2px; }
 </style>
 """
 
@@ -121,7 +143,7 @@ def inr(x):
     return f"{sign}₹{whole}" + ("" if frac == "00" else f".{frac}")
 
 
-AV_COLORS = ["#4f46e5", "#0ea5e9", "#14b8a6", "#f59e0b", "#ec4899", "#8b5cf6", "#ef4444", "#22c55e"]
+AV_COLORS = ["#0f3d4c", "#2f6f8f", "#1e7a4f", "#8a6d1f", "#8c4a5e", "#556b8d", "#a24c3b", "#3f7d6e"]
 
 
 def avatar(name):
@@ -132,10 +154,10 @@ def avatar(name):
 
 def status_of(b):
     if b > 0:
-        return "g", "Aapko milna hai"
+        return "g", "Receivable"
     if b < 0:
-        return "r", "Aapko dena hai"
-    return "z", "Hisab barabar"
+        return "r", "Payable"
+    return "z", "Settled"
 
 
 def kpi(label, value, sub, cls):
@@ -213,6 +235,8 @@ def init_db():
             );
             """
         )
+        for old, new in LEGACY_KINDS.items():
+            c.execute("UPDATE txns SET kind = ? WHERE kind = ?", (new, old))
         c.commit()
 
 
@@ -248,9 +272,9 @@ def income_df():
 
 
 LOAN_PEN_TYPES = {
-    "fixed": "Fixed (har late kist par ek baar)",
-    "daily": "Per din (har din ki der par)",
-    "pct": "% bayaj har mahine (late kist par, din ke hisab se)",
+    "fixed": "Fixed amount per late instalment",
+    "daily": "Fixed amount per day of delay",
+    "pct": "% interest per month on the late instalment (pro rata by day)",
 }
 
 
@@ -276,7 +300,7 @@ def loan_pay_df():
 
 
 def loan_schedule(loan, pays, today):
-    """Har kist ki due date, kab bhari, kitne din late aur penalty."""
+    """Due date, payment date, days late and penalty for each instalment."""
     kist = float(loan["kist_amount"])
     n = int(loan["total_kists"])
     first = date.fromisoformat(str(loan["first_due"])[:10])
@@ -289,7 +313,7 @@ def loan_schedule(loan, pays, today):
     rows = []
     for i in range(1, n + 1):
         due = add_months(first, i - 1)
-        # i-vi kist tab bhari maani jaati hai jab ab tak ki total kist-rakam i*kist tak pahunch jaye
+        # Instalment i counts as paid once cumulative instalment payments reach i * instalment amount
         paid_on = next((d for d, c in events if c >= kist * i - 0.005), None)
         late = max(((paid_on or today) - due).days, 0)
         if late <= 0:
@@ -352,16 +376,16 @@ def check_password():
         return True
     _, mid, _ = st.columns([1, 1.2, 1])
     with mid:
-        hero("📒 Udhari Khata", "Apna hisab, apne haath me. Aage badhne ke liye login kijiye.")
+        hero("Udhari Khata", "Sign in to access your ledger.")
         with st.form("login"):
             entered = st.text_input("Password", type="password")
-            ok = st.form_submit_button("Login", use_container_width=True, type="primary")
+            ok = st.form_submit_button("Sign in", use_container_width=True, type="primary")
         if ok:
             if hmac.compare_digest(entered.encode(), str(pw).encode()):
                 st.session_state["logged_in"] = True
                 st.rerun()
             else:
-                st.error("Galat password")
+                st.error("Incorrect password.")
     return False
 
 
@@ -375,18 +399,18 @@ def go(page, party=None):
 # ---------------------------------------------------------------- pages
 def party_card(r, key):
     cls, label = status_of(r["balance"])
-    last = f"Aakhri entry: {r['last']}" if r["last"] else "Koi entry nahi"
+    last = f"last entry {r['last']}" if r["last"] else "no entries yet"
     with st.container(border=True):
         st.markdown(
             f'<div class="pcard-top">{avatar(r["name"])}<div>'
             f'<div class="pname">{escape(r["name"])}</div>'
-            f'<div class="pmeta">{r["entries"]} entries · {last}</div></div></div>'
+            f'<div class="pmeta">{r["entries"]} entries, {last}</div></div></div>'
             f'<div class="pamt {"pos" if cls == "g" else "neg" if cls == "r" else ""}">'
             f'{inr(abs(r["balance"]))}</div><span class="chip {cls}">{label}</span>',
             unsafe_allow_html=True,
         )
         st.button(
-            "➕ Is party ki entry", key=key, use_container_width=True,
+            "Add entry", key=key, use_container_width=True,
             on_click=go, args=(P_NEW, r["name"]),
         )
 
@@ -407,10 +431,10 @@ def cash_flow():
         amt, kind = t["amount"], t["kind"]
         parts.append(pd.DataFrame({
             "month": t["date"].str[:7],
-            "Udhar diya": amt.where(kind == "Maine udhar diya", 0.0),
-            "Udhar wapas diya": amt.where(kind == "Maine paise wapas diye", 0.0),
-            "Wapas mile": amt.where(kind == "Mujhe paise wapas mile", 0.0),
-            "Udhar liya": amt.where(kind == "Maine udhar liya", 0.0),
+            "Udhar diya": amt.where(kind == "Money lent", 0.0),
+            "Udhar wapas diya": amt.where(kind == "Repayment made", 0.0),
+            "Wapas mile": amt.where(kind == "Repayment received", 0.0),
+            "Udhar liya": amt.where(kind == "Money borrowed", 0.0),
         }))
     p = loan_pay_df()
     if not p.empty:
@@ -434,7 +458,7 @@ def cash_total():
 
 
 def show_cash_left():
-    st.caption(f"👛 Income me se ab bacha: {inr(cash_total())}")
+    st.caption(f"Net cash position: {inr(cash_total())}")
 
 
 def cash_section():
@@ -445,35 +469,35 @@ def cash_section():
     gaya = float(cf["Gaya"].sum())
     other_in = float((cf["Wapas mile"] + cf["Udhar liya"]).sum())
     bacha = float(cf["Bacha"].sum())
-    st.subheader("👛 Income me se hisab")
+    st.subheader("Cash flow")
     k1, k2, k3 = st.columns(3)
-    k1.markdown(kpi("💵 Kul income", inr(income), "ab tak ki", "g"), unsafe_allow_html=True)
+    k1.markdown(kpi("Total income", inr(income), "to date", "g"), unsafe_allow_html=True)
     k2.markdown(
-        kpi("📤 Kul gaya", inr(gaya), "udhari diya, wapas diye, kist, bayaj/penalty", "r"),
+        kpi("Total outflow", inr(gaya), "lent, repaid, instalments, penalties", "r"),
         unsafe_allow_html=True,
     )
     k3.markdown(
-        kpi("👛 Income me se bacha", inr(bacha), f"income + {inr(other_in)} aur aaya − gaya",
+        kpi("Net cash position", inr(bacha), f"income + {inr(other_in)} other inflow − outflow",
             "g" if bacha >= 0 else "r"),
         unsafe_allow_html=True,
     )
     st.caption(
-        f"Gaya: udhar diya {inr(cf['Udhar diya'].sum())} · udhar wapas diya {inr(cf['Udhar wapas diya'].sum())} · "
-        f"kist {inr(cf['Kist'].sum())} · bayaj/penalty {inr(cf['Penalty'].sum())}. "
-        f"Aur aaya: paise wapas mile {inr(cf['Wapas mile'].sum())} · udhar liya {inr(cf['Udhar liya'].sum())}."
+        f"Outflow: lent {inr(cf['Udhar diya'].sum())}, repaid {inr(cf['Udhar wapas diya'].sum())}, "
+        f"instalments {inr(cf['Kist'].sum())}, penalties {inr(cf['Penalty'].sum())}. "
+        f"Other inflow: repayments received {inr(cf['Wapas mile'].sum())}, borrowed {inr(cf['Udhar liya'].sum())}."
     )
-    with st.expander("Mahine-wise hisab"):
+    with st.expander("Monthly breakdown"):
         tbl = pd.DataFrame({
             "Income": cf["Income"],
-            "Aur aaya": cf["Wapas mile"] + cf["Udhar liya"],
-            "Gaya": cf["Gaya"],
-            "Bacha": cf["Bacha"],
-            "Ab tak bacha": cf["Bacha"].cumsum(),
-        }).iloc[::-1].reset_index().rename(columns={"month": "Mahina"})
+            "Other inflow": cf["Wapas mile"] + cf["Udhar liya"],
+            "Outflow": cf["Gaya"],
+            "Net": cf["Bacha"],
+            "Cumulative": cf["Bacha"].cumsum(),
+        }).iloc[::-1].reset_index().rename(columns={"month": "Month"})
         money = st.column_config.NumberColumn(format="₹%.2f")
         st.dataframe(
             tbl, hide_index=True, use_container_width=True,
-            column_config={c: money for c in ["Income", "Aur aaya", "Gaya", "Bacha", "Ab tak bacha"]},
+            column_config={c: money for c in ["Income", "Other inflow", "Outflow", "Net", "Cumulative"]},
         )
     st.write("")
 
@@ -488,22 +512,22 @@ def loan_section():
         (l, loan_summary(l, pays[pays["loan_id"] == l["id"]], today))
         for l in loans.to_dict("records")
     ]
-    st.subheader("🏦 Loan aur Kist")
+    st.subheader("Loans and instalments")
     pending = sum(i["pending"] for _, i in items)
     pen_due = sum(i["pen_due"] for _, i in items)
     n_late = sum(len(i["overdue"]) for _, i in items)
     k1, k2, k3 = st.columns(3)
     k1.markdown(
-        kpi("🏦 Loan baaki (bayaj ke sath)", inr(pending + pen_due),
-            f"kist {inr(pending)} + bayaj/penalty {inr(pen_due)}", "b"),
+        kpi("Loan outstanding", inr(pending + pen_due),
+            f"instalments {inr(pending)} + penalty {inr(pen_due)}", "b"),
         unsafe_allow_html=True,
     )
     k2.markdown(
-        kpi("⚠️ Bayaj / Penalty baaki", inr(pen_due), "late kist par laga", "r" if pen_due > 0.005 else "g"),
+        kpi("Penalty outstanding", inr(pen_due), "charged on late instalments", "r" if pen_due > 0.005 else "g"),
         unsafe_allow_html=True,
     )
     k3.markdown(
-        kpi("⏰ Late kist", str(n_late), "time par nahi bhari", "r" if n_late else "g"),
+        kpi("Overdue instalments", str(n_late), "not paid on time", "r" if n_late else "g"),
         unsafe_allow_html=True,
     )
     st.write("")
@@ -512,60 +536,60 @@ def loan_section():
         for col, (l, i) in zip(cols, items[start:start + 3]):
             with col, st.container(border=True):
                 if i["overdue"]:
-                    cls, label = "r", f"{len(i['overdue'])} kist late"
+                    cls, label = "r", f"{len(i['overdue'])} overdue"
                 elif i["pending"] <= 0.005 and i["pen_due"] > 0.005:
-                    cls, label = "r", "Bayaj baaki"
+                    cls, label = "r", "Penalty due"
                 elif i["pending"] <= 0.005:
-                    cls, label = "g", "Loan poora"
+                    cls, label = "g", "Fully paid"
                 else:
-                    cls, label = "g", "Time par"
+                    cls, label = "g", "On schedule"
                 nxt = i["next"]
-                nxt_txt = f"Agli kist: {nxt['due'].strftime('%d %b %Y')}" if nxt else "Saari kist ho gayi"
+                nxt_txt = f"next due {nxt['due'].strftime('%d %b %Y')}" if nxt else "all instalments paid"
                 st.markdown(
                     f'<div class="pcard-top">{avatar(l["name"])}<div>'
                     f'<div class="pname">{escape(l["name"])}</div>'
-                    f'<div class="pmeta">{inr(l["kist_amount"])} × {int(l["total_kists"])} kist · {nxt_txt}</div>'
+                    f'<div class="pmeta">{inr(l["kist_amount"])} × {int(l["total_kists"])} instalments, {nxt_txt}</div>'
                     f'</div></div>'
-                    f'<div class="pmeta" style="margin-top:8px">Baaki (bayaj ke sath)</div>'
+                    f'<div class="pmeta" style="margin-top:8px">Outstanding (incl. penalty)</div>'
                     f'<div class="pamt" style="margin-top:0">{inr(i["pending"] + i["pen_due"])}</div>'
                     f'<span class="chip {cls}">{label}</span>'
-                    f'<div class="pmeta" style="margin-top:6px">{i["paid_cnt"]}/{int(l["total_kists"])} kist bhari</div>',
+                    f'<div class="pmeta" style="margin-top:6px">{i["paid_cnt"]} of {int(l["total_kists"])} instalments paid</div>',
                     unsafe_allow_html=True,
                 )
                 if i["pen_due"] > 0.005:
                     st.markdown(
                         f'<div class="neg" style="font-weight:700;font-size:.85rem">'
-                        f'⚠️ Bayaj / Penalty baaki: {inr(i["pen_due"])}</div>',
+                        f'Penalty due: {inr(i["pen_due"])}</div>',
                         unsafe_allow_html=True,
                     )
                 st.caption(
-                    f"Kist baaki {inr(i['pending'])} + bayaj/penalty {inr(i['pen_due'])}"
+                    f"Instalments due {inr(i['pending'])} + penalty {inr(i['pen_due'])}"
                 )
                 st.progress(min(i["paid"] / i["total"], 1.0) if i["total"] else 0.0)
-                with st.expander("Kist ki list"):
+                with st.expander("Instalment schedule"):
                     tbl = pd.DataFrame([
                         {
-                            "Kist": r["no"],
+                            "No.": r["no"],
                             "Due date": r["due"].isoformat(),
-                            "Bhari": r["paid_on"].isoformat() if r["paid_on"] else "—",
-                            "Der (din)": r["late"],
-                            "Bayaj / Penalty": r["penalty"],
+                            "Paid on": r["paid_on"].isoformat() if r["paid_on"] else "—",
+                            "Days late": r["late"],
+                            "Penalty": r["penalty"],
                         }
                         for r in i["rows"]
                     ])
                     st.dataframe(
                         tbl, hide_index=True, use_container_width=True,
-                        column_config={"Bayaj / Penalty": st.column_config.NumberColumn(format="₹%.2f")},
+                        column_config={"Penalty": st.column_config.NumberColumn(format="₹%.2f")},
                     )
 
 
 def page_dashboard():
-    hero("📒 Udhari Khata", f"Aaj {date.today().strftime('%d %b %Y')} · aapka poora hisab ek nazar me")
+    hero("Dashboard", f"Your financial position as of {date.today().strftime('%d %b %Y')}")
     df = txns_df()
     inc = income_df()
     if df.empty and inc.empty and loans_df().empty:
-        st.info("Abhi koi entry nahi hai. Shuru karne ke liye 'Nayi Entry' par jaiye.")
-        st.button("➕ Pehli entry daalein", on_click=go, args=(P_NEW,), type="primary")
+        st.info("No records yet. Add your first entry to get started.")
+        st.button("Add first entry", on_click=go, args=(P_NEW,), type="primary")
         return
 
     s = summary_df()
@@ -576,13 +600,13 @@ def page_dashboard():
 
     this_month = inc.loc[inc["month"] == date.today().strftime("%Y-%m"), "amount"].sum()
     c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(kpi("💰 Aapko milna hai", inr(milna), f"{n_mil} logon se", "g"), unsafe_allow_html=True)
-    c2.markdown(kpi("🧾 Aapko dena hai", inr(dena), f"{n_den} logon ko", "r"), unsafe_allow_html=True)
+    c1.markdown(kpi("Receivable", inr(milna), f"from {n_mil} parties", "g"), unsafe_allow_html=True)
+    c2.markdown(kpi("Payable", inr(dena), f"to {n_den} parties", "r"), unsafe_allow_html=True)
     c3.markdown(
-        kpi("⚖️ Net balance", inr(milna - dena), "milna − dena", "b"), unsafe_allow_html=True
+        kpi("Net balance", inr(milna - dena), "receivable − payable", "b"), unsafe_allow_html=True
     )
     c4.markdown(
-        kpi("💵 Is mahine ki income", inr(this_month), date.today().strftime("%B %Y"), "g"),
+        kpi("Income this month", inr(this_month), date.today().strftime("%B %Y"), "g"),
         unsafe_allow_html=True,
     )
     st.write("")
@@ -592,76 +616,76 @@ def page_dashboard():
 
     left, right = st.columns([1.35, 1])
     with left:
-        st.subheader("Sabse badi baaki")
+        st.subheader("Largest balances")
         top = s[s["balance"] != 0].copy()
-        top["Rakam"] = top["balance"].abs()
-        top["Status"] = top["balance"].apply(lambda b: "Milna hai" if b > 0 else "Dena hai")
-        top = top.sort_values("Rakam", ascending=False).head(8)
+        top["Amount"] = top["balance"].abs()
+        top["Status"] = top["balance"].apply(lambda b: "Receivable" if b > 0 else "Payable")
+        top = top.sort_values("Amount", ascending=False).head(8)
         if top.empty:
-            st.success("Sabka hisab barabar hai 🎉")
+            st.success("All balances are settled.")
         else:
             chart = (
                 alt.Chart(top)
-                .mark_bar(cornerRadiusEnd=6, size=22)
+                .mark_bar(cornerRadiusEnd=2, size=20)
                 .encode(
                     y=alt.Y("name:N", sort="-x", title=None),
-                    x=alt.X("Rakam:Q", title="Rakam (₹)"),
+                    x=alt.X("Amount:Q", title="Amount (₹)"),
                     color=alt.Color(
                         "Status:N",
-                        scale=alt.Scale(domain=["Milna hai", "Dena hai"], range=[GREEN, RED]),
+                        scale=alt.Scale(domain=["Receivable", "Payable"], range=[GREEN, RED]),
                         legend=alt.Legend(orient="bottom", title=None),
                     ),
-                    tooltip=[alt.Tooltip("name:N", title="Naam"), "Status:N",
-                             alt.Tooltip("Rakam:Q", format=",.2f")],
+                    tooltip=[alt.Tooltip("name:N", title="Name"), "Status:N",
+                             alt.Tooltip("Amount:Q", format=",.2f")],
                 )
                 .properties(height=max(120, 38 * len(top)))
             )
             st.altair_chart(chart, use_container_width=True)
     with right:
-        st.subheader("Haal ki entries")
+        st.subheader("Recent activity")
         for _, r in df.sort_values(["date", "id"], ascending=False).head(6).iterrows():
             pos = r["signed"] > 0
             st.markdown(
-                f'<div class="act"><div><div class="l">{KIND_ICON[r["kind"]]} {escape(r["party"])}</div>'
-                f'<div class="s">{escape(r["kind"])} · {r["date"]}</div></div>'
+                f'<div class="act"><div><div class="l">{escape(r["party"])}</div>'
+                f'<div class="s">{escape(r["kind"])}, {r["date"]}</div></div>'
                 f'<div class="a {"pos" if pos else "neg"}">{"+" if pos else "−"}{inr(r["amount"])}</div></div>',
                 unsafe_allow_html=True,
             )
 
     if not inc.empty:
-        st.subheader("Mahine-wise income")
+        st.subheader("Monthly income")
         monthly = inc.groupby("month")["amount"].sum().reset_index().tail(12)
         ichart = (
             alt.Chart(monthly)
-            .mark_bar(cornerRadiusEnd=6, color=GREEN)
+            .mark_bar(cornerRadiusEnd=2, color=GREEN)
             .encode(
                 x=alt.X("month:N", title=None, sort=None),
-                y=alt.Y("amount:Q", title="Rakam (₹)"),
-                tooltip=[alt.Tooltip("month:N", title="Mahina"),
+                y=alt.Y("amount:Q", title="Amount (₹)"),
+                tooltip=[alt.Tooltip("month:N", title="Month"),
                          alt.Tooltip("amount:Q", title="Income", format=",.2f")],
             )
             .properties(height=220)
         )
         st.altair_chart(ichart, use_container_width=True)
-        st.caption(f"Ab tak ki total income: {inr(inc['amount'].sum())} · {len(inc)} entries")
+        st.caption(f"Total income to date: {inr(inc['amount'].sum())} across {len(inc)} entries")
 
-    st.subheader("Saari parties")
+    st.subheader("All parties")
     f1, f2 = st.columns([2, 1])
-    q = f1.text_input("🔍 Naam se dhundhiye", placeholder="Naam likhiye...", label_visibility="collapsed")
-    flt = f2.selectbox("Filter", ["Sab", "Mujhe milna hai", "Mujhe dena hai", "Hisab barabar"],
+    q = f1.text_input("Search by name", placeholder="Search by name", label_visibility="collapsed")
+    flt = f2.selectbox("Filter", ["All", "Receivable", "Payable", "Settled"],
                        label_visibility="collapsed")
     v = s.copy()
     if q.strip():
         v = v[v["name"].str.contains(q.strip(), case=False, regex=False)]
-    if flt == "Mujhe milna hai":
+    if flt == "Receivable":
         v = v[v["balance"] > 0]
-    elif flt == "Mujhe dena hai":
+    elif flt == "Payable":
         v = v[v["balance"] < 0]
-    elif flt == "Hisab barabar":
+    elif flt == "Settled":
         v = v[v["balance"] == 0]
     v = v.reindex(v["balance"].abs().sort_values(ascending=False).index)
     if v.empty:
-        st.caption("Koi party nahi mili.")
+        st.caption("No matching parties.")
     rows = list(v.iterrows())
     for i in range(0, len(rows), 3):
         cols = st.columns(3)
@@ -672,67 +696,67 @@ def page_dashboard():
 
 def income_form():
     # form ke bahar, taaki 'Other' chunte hi neeche naam likhne ka box turant aa jaye
-    source = st.selectbox("Kahan se", INCOME_SOURCES, key="inc_source")
+    source = st.selectbox("Source", INCOME_SOURCES, key="inc_source")
     other = ""
     if source == "Other":
-        other = st.text_input("Other ka naam likhiye", placeholder="jaise: Tuition / Freelance", key="inc_other")
+        other = st.text_input("Specify source", placeholder="e.g. Tuition, Freelance", key="inc_other")
     with st.form("income_form", clear_on_submit=True):
         a, b = st.columns(2)
-        amount = a.number_input("Income (₹)", min_value=0.0, step=500.0, format="%.2f")
-        idate = b.date_input("Kis tarikh ko mili", value=date.today())
-        note = st.text_input("Note (optional)", placeholder="jaise: overtime / commission")
-        ok = st.form_submit_button("💾 Income save karein", type="primary", use_container_width=True)
+        amount = a.number_input("Amount (₹)", min_value=0.0, step=500.0, format="%.2f")
+        idate = b.date_input("Date received", value=date.today())
+        note = st.text_input("Note (optional)", placeholder="e.g. overtime, commission")
+        ok = st.form_submit_button("Save income", type="primary", use_container_width=True)
     if ok:
         final_source = other.strip() if source == "Other" else source
         if amount <= 0:
-            st.error("Rakam 0 se zyada honi chahiye.")
+            st.error("Amount must be greater than 0.")
         elif not final_source:
-            st.error("'Other' chuna hai to 'kahan se' likhna zaroori hai.")
+            st.error("Specify the source when 'Other' is selected.")
         else:
             run(
                 "INSERT INTO income(idate, amount, source, note) VALUES (?,?,?,?)",
                 (idate.isoformat(), float(amount), final_source, note.strip()),
             )
-            st.success(f"✅ {inr(amount)} ki income save ho gayi.")
-            st.toast("Income save ho gayi", icon="✅")
+            st.success(f"Income of {inr(amount)} saved.")
+            st.toast("Income saved")
             show_cash_left()
 
 
 def loan_entry_form():
     mode = st.radio(
-        "Kya karna hai?", ["➕ Naya loan jodein", "💸 Kist / bayaj bhari"],
+        "Action", ["Add new loan", "Record payment"],
         horizontal=True, key="loan_mode",
     )
-    if mode.startswith("➕"):
+    if mode == "Add new loan":
         # form ke bahar, taaki bayaj ka label turant badle
         ptype = st.radio(
-            "Late kist par bayaj / penalty kaise lagti hai?", list(LOAN_PEN_TYPES.values()),
+            "How is penalty charged on late instalments?", list(LOAN_PEN_TYPES.values()),
             horizontal=True, key="loan_pen_type",
         )
         pkey = next(k for k, v in LOAN_PEN_TYPES.items() if v == ptype)
         with st.form("loan_new", clear_on_submit=True):
-            name = st.text_input("Loan ka naam", placeholder="jaise: Bank loan / Ramesh se liya")
+            name = st.text_input("Loan name", placeholder="e.g. Bank loan, Personal loan from Ramesh")
             a, b, c = st.columns(3)
-            loan_amount = a.number_input("Loan ki rakam (₹, optional)", min_value=0.0, step=1000.0, format="%.2f")
-            kist = b.number_input("Ek kist (₹)", min_value=0.0, step=100.0, format="%.2f")
-            n = c.number_input("Kul kitni kist", min_value=1, value=12, step=1)
+            loan_amount = a.number_input("Loan amount (₹, optional)", min_value=0.0, step=1000.0, format="%.2f")
+            kist = b.number_input("Instalment amount (₹)", min_value=0.0, step=100.0, format="%.2f")
+            n = c.number_input("Number of instalments", min_value=1, value=12, step=1)
             d, e = st.columns(2)
             pen = d.number_input(
-                {"daily": "Bayaj / penalty (₹ per din)",
-                 "pct": "Bayaj (% har mahine)"}.get(pkey, "Bayaj / penalty (₹ har late kist par)"),
+                {"daily": "Penalty (₹ per day)",
+                 "pct": "Interest (% per month)"}.get(pkey, "Penalty (₹ per late instalment)"),
                 min_value=0.0, step=0.5 if pkey == "pct" else 10.0, format="%.2f",
             )
-            first = e.date_input("Pehli kist ki due date", value=date.today())
-            note = st.text_input("Note (optional)", placeholder="jaise: bike loan / mahine ki 5 tarikh")
-            ok = st.form_submit_button("💾 Loan save karein", type="primary", use_container_width=True)
+            first = e.date_input("First due date", value=date.today())
+            note = st.text_input("Note (optional)", placeholder="e.g. vehicle loan, due on the 5th")
+            ok = st.form_submit_button("Save loan", type="primary", use_container_width=True)
         if ok:
             name = name.strip()
             if not name:
-                st.error("Loan ka naam likhiye.")
+                st.error("Enter a loan name.")
             elif kist <= 0:
-                st.error("Ek kist ki rakam 0 se zyada honi chahiye.")
+                st.error("Instalment amount must be greater than 0.")
             elif not query_df("SELECT 1 FROM loans WHERE name = ? COLLATE NOCASE", (name,)).empty:
-                st.error("Is naam ka loan pehle se hai, doosra naam chuniye.")
+                st.error("A loan with this name already exists. Use a different name.")
             else:
                 run(
                     "INSERT INTO loans(name, loan_amount, kist_amount, total_kists, first_due, "
@@ -741,96 +765,93 @@ def loan_entry_form():
                      pkey, float(pen), note.strip()),
                 )
                 st.success(
-                    f"✅ '{name}' loan save ho gaya: {int(n)} kist × {inr(kist)} = {inr(kist * n)}."
+                    f"Loan '{name}' saved: {int(n)} instalments × {inr(kist)} = {inr(kist * n)}."
                 )
-                st.toast("Loan save ho gaya", icon="✅")
+                st.toast("Loan saved")
         return
 
     loans = loans_df()
     if loans.empty:
-        st.info("Pehle 'Naya loan jodein' se loan banaiye.")
+        st.info("Add a loan first, using 'Add new loan'.")
         return
-    pick = st.selectbox("Kaun sa loan?", loans["name"].tolist(), key="loan_pick")
+    pick = st.selectbox("Loan", loans["name"].tolist(), key="loan_pick")
     l = loans[loans["name"] == pick].iloc[0].to_dict()
     pays = loan_pay_df()
     inf = loan_summary(l, pays[pays["loan_id"] == l["id"]], date.today())
     nxt = inf["next"]
     st.caption(
-        f"Baaki kist: {inr(inf['pending'])} · Bayaj / penalty baaki: {inr(inf['pen_due'])}"
-        + (f" · Agli kist: {nxt['due'].strftime('%d %b %Y')}" if nxt else " · Saari kist ho gayi")
+        f"Instalments due: {inr(inf['pending'])}, penalty due: {inr(inf['pen_due'])}"
+        + (f", next due {nxt['due'].strftime('%d %b %Y')}" if nxt else ", all instalments paid")
     )
     if inf["overdue"]:
-        st.warning(f"{len(inf['overdue'])} kist late hai. Ab tak ka bayaj / penalty: {inr(inf['pen_total'])}")
+        st.warning(f"{len(inf['overdue'])} instalment(s) overdue. Penalty accrued to date: {inr(inf['pen_total'])}")
 
     with st.form("loan_pay", clear_on_submit=True):
-        kind = st.radio("Kya bhara?", ["Kist", "Bayaj / Penalty"], horizontal=True)
+        kind = st.radio("Payment type", ["Instalment", "Penalty"], horizontal=True)
         a, b = st.columns(2)
         amount = a.number_input(
-            "Rakam (₹)", min_value=0.0, value=float(l["kist_amount"]), step=100.0,
+            "Amount (₹)", min_value=0.0, value=float(l["kist_amount"]), step=100.0,
             format="%.2f", key=f"lp_amt_{l['id']}",
         )
-        pdate = b.date_input("Kis tarikh ko bhari", value=date.today())
-        note = st.text_input("Note (optional)", placeholder="jaise: online / cash")
-        ok = st.form_submit_button("💾 Save karein", type="primary", use_container_width=True)
+        pdate = b.date_input("Payment date", value=date.today())
+        note = st.text_input("Note (optional)", placeholder="e.g. online, cash")
+        ok = st.form_submit_button("Save payment", type="primary", use_container_width=True)
     if ok:
         if amount <= 0:
-            st.error("Rakam 0 se zyada honi chahiye.")
+            st.error("Amount must be greater than 0.")
         else:
             run(
                 "INSERT INTO loan_payments(loan_id, pdate, kind, amount, note) VALUES (?,?,?,?,?)",
-                (int(l["id"]), pdate.isoformat(), "kist" if kind == "Kist" else "penalty", float(amount), note.strip()),
+                (int(l["id"]), pdate.isoformat(), "kist" if kind == "Instalment" else "penalty", float(amount), note.strip()),
             )
-            st.success(f"✅ {pick}: {kind} {inr(amount)} save ho gayi.")
-            st.toast("Save ho gaya", icon="✅")
+            st.success(f"{pick}: {kind.lower()} of {inr(amount)} saved.")
+            st.toast("Payment saved")
             show_cash_left()
 
 
 def page_new_entry():
-    hero("➕ Nayi Entry", "Len-den, income ya loan ki kist kuch hi second me likhiye")
+    hero("New entry", "Record a transaction, income or loan payment")
     typ = st.radio(
-        "Entry ka type", ["📒 Udhari / Len-den", "💰 Income (kamai)", "🏦 Loan / Kist"],
+        "Entry type", ["Lending / borrowing", "Income", "Loan / instalment"],
         horizontal=True, key="entry_type",
     )
-    if typ.startswith("💰"):
+    if typ == "Income":
         income_form()
         return
-    if typ.startswith("🏦"):
+    if typ == "Loan / instalment":
         loan_entry_form()
         return
     parties = parties_df()
     pre = st.session_state.pop("prefill_party", None)
-    options = ["-- nayi party --"] + parties["name"].tolist()
+    options = ["-- New party --"] + parties["name"].tolist()
     idx = options.index(pre) if pre in options else 0
 
     with st.form("entry_form", clear_on_submit=True):
-        kind = st.radio(
-            "Kya hua?", list(KINDS.keys()), horizontal=True,
-            format_func=lambda k: f"{KIND_ICON[k]} {k}",
-        )
+        kind = st.radio("Transaction type", list(KINDS.keys()), horizontal=True)
         a, b = st.columns(2)
-        existing = a.selectbox("Purani party", options, index=idx)
-        new_name = b.text_input("Ya nayi party ka naam", placeholder="jaise: Ramesh Bhaiya")
+        existing = a.selectbox("Existing party", options, index=idx)
+        new_name = b.text_input("Or new party name", placeholder="e.g. Ramesh Sharma")
         c, d, e = st.columns(3)
-        amount = c.number_input("Rakam (₹)", min_value=0.0, step=100.0, format="%.2f")
-        tdate = d.date_input("Tarikh", value=date.today())
+        amount = c.number_input("Amount (₹)", min_value=0.0, step=100.0, format="%.2f")
+        tdate = d.date_input("Date", value=date.today())
         phone = e.text_input("Phone (optional)", placeholder="98xxxxxx10")
-        note = st.text_input("Note (optional)", placeholder="jaise: dukaan ka saaman / shaadi ke liye")
-        submitted = st.form_submit_button("💾 Save karein", type="primary", use_container_width=True)
+        note = st.text_input("Note (optional)", placeholder="e.g. shop supplies, wedding expenses")
+        submitted = st.form_submit_button("Save payment", type="primary", use_container_width=True)
 
     if submitted:
         name = new_name.strip() or ("" if existing.startswith("--") else existing)
         if not name:
-            st.error("Party ka naam chuniye ya likhiye.")
+            st.error("Select or enter a party name.")
         elif amount <= 0:
-            st.error("Rakam 0 se zyada honi chahiye.")
+            st.error("Amount must be greater than 0.")
         else:
             pid = get_or_create_party(name, phone)
             run(
                 "INSERT INTO txns(party_id, tdate, kind, amount, note) VALUES (?,?,?,?,?)",
                 (pid, tdate.isoformat(), kind, float(amount), note.strip()),
             )
-            st.success(f"✅ {name} ke saath {inr(amount)} ki entry save ho gayi.")
-            st.toast("Entry save ho gayi", icon="✅")
+            st.success(f"Entry saved: {inr(amount)} with {name}.")
+            st.toast("Entry saved")
             show_cash_left()
 
 
@@ -896,7 +917,7 @@ def template_xlsx():
     def dropdown(ws, options, rng, strict=True):
         dv = DataValidation(type="list", formula1='"' + ",".join(options) + '"',
                             allow_blank=True, showErrorMessage=strict)
-        dv.error, dv.errorTitle = "Dropdown se chuniye", "Galat value"
+        dv.error, dv.errorTitle = "Select a value from the dropdown", "Invalid value"
         ws.add_data_validation(dv)
         dv.add(rng)
 
@@ -917,45 +938,45 @@ def template_xlsx():
     make(ws4, PAY_COLS, [24, 14, 12, 14, 30])
     dropdown(ws4, ["kist", "penalty"], "C2:C1000")
 
-    ws5 = wb.create_sheet("Kaise bhare")
+    ws5 = wb.create_sheet("Instructions")
     lines = [
-        ("Restore ke liye Excel kaise bhare", True),
+        ("How to prepare the restore file", True),
         ("", False),
-        ("1. Har sheet me heading wali pehli row mat badliye, uske neeche se data likhiye.", False),
-        ("2. Saari sheet zaroori nahi - sirf jis sheet me data hai wahi judega.", False),
-        ("3. Is 'Kaise bhare' sheet ko rakhein ya hata dein, koi farak nahi padta.", False),
-        ("4. Tarikh hamesha YYYY-MM-DD me likhiye, jaise 2026-10-27.", False),
+        ("1. Do not change the header row on any sheet. Enter data below it.", False),
+        ("2. Not every sheet is required. Only sheets that contain data are imported.", False),
+        ("3. You may keep or remove this Instructions sheet. It has no effect.", False),
+        ("4. Enter dates as YYYY-MM-DD, for example 2026-10-27.", False),
         ("", False),
-        ("Udhari sheet", True),
-        ("party  -> samne wale ka naam (nayi party ho to apne aap ban jayegi)", False),
-        ("date   -> tarikh", False),
-        ("kind   -> dropdown se chuniye (neeche ke 4 me se ek):", False),
+        ("Udhari sheet (lending and borrowing)", True),
+        ("party  -> name of the other party (created automatically if new)", False),
+        ("date   -> transaction date", False),
+        ("kind   -> select from the dropdown (one of the values below):", False),
     ] + [("          - " + k, False) for k in KINDS] + [
-        ("amount -> rakam, 0 se zyada, jaise 1500 ya 250.50", False),
+        ("amount -> amount greater than 0, for example 1500 or 250.50", False),
         ("note   -> optional", False),
         ("", False),
         ("Income sheet", True),
-        ("date, amount, note -> upar jaisa", False),
-        ("source -> kahan se (jaise Salary, Bonus, Kiraya ya apna likha hua naam)", False),
+        ("date, amount, note -> as above", False),
+        ("source -> where the income came from (for example Salary, Bonus, Rent, or your own label)", False),
         ("", False),
-        ("Loan sheet (ek loan = ek row)", True),
-        ("name           -> loan ka naam (har loan ka alag naam)", False),
-        ("loan_amount    -> loan ki rakam (optional, khali ya 0 chalega)", False),
-        ("kist_amount    -> ek kist ki rakam, 0 se zyada", False),
-        ("total_kists    -> kul kitni kist", False),
-        ("first_due      -> pehli kist ki due date (baaki har mahine usi tarikh ko)", False),
-        ("penalty_type   -> fixed = har late kist par ek baar, daily = har din ki der par, pct = % bayaj har mahine", False),
-        ("penalty_amount -> bayaj/penalty (fixed: ek baar ki rakam, daily: ek din ki rakam, pct: % har mahine)", False),
+        ("Loan sheet (one loan per row)", True),
+        ("name           -> loan name (must be unique)", False),
+        ("loan_amount    -> loan amount (optional, may be blank or 0)", False),
+        ("kist_amount    -> amount of one instalment, greater than 0", False),
+        ("total_kists    -> total number of instalments", False),
+        ("first_due      -> due date of the first instalment (later ones fall on the same day each month)", False),
+        ("penalty_type   -> fixed = once per late instalment, daily = per day of delay, pct = % interest per month", False),
+        ("penalty_amount -> fixed: amount per late instalment, daily: amount per day, pct: % per month", False),
         ("note           -> optional", False),
         ("", False),
-        ("Kist_Penalty sheet (loan me bhari gayi kist ya penalty)", True),
-        ("loan   -> wahi naam jo Loan sheet me hai (pehle se app me ho to bhi chalega)", False),
-        ("date   -> kis tarikh ko bhari", False),
-        ("kind   -> kist ya penalty (penalty = bayaj/penalty ki rakam)", False),
-        ("amount -> rakam", False),
+        ("Kist_Penalty sheet (instalments and penalties paid against a loan)", True),
+        ("loan   -> loan name, as on the Loan sheet (loans already in the app also work)", False),
+        ("date   -> payment date", False),
+        ("kind   -> kist or penalty", False),
+        ("amount -> amount paid", False),
         ("note   -> optional", False),
         ("", False),
-        ("Duplicate entries (bilkul same data) dobara nahi judti.", False),
+        ("Exact duplicate rows are skipped, so restoring the same file twice is safe.", False),
     ]
     for text, bold in lines:
         ws5.append([text])
@@ -986,29 +1007,29 @@ def wipe_callback():
 
 def wipe_section(counts):
     st.divider()
-    st.markdown("#### 🗑️ Saara data delete karein")
+    st.markdown("#### Delete all data")
     st.caption(counts)
-    with st.expander("Khatarnak: poora data mitane ke liye kholiye"):
+    with st.expander("Danger zone"):
         st.error(
-            "Ye udhari, parties, income, loan aur kist ka **poora data hamesha ke liye** hata dega. "
-            "Wapas nahi aayega. Pehle upar se Excel backup download kar lijiye."
+            "This permanently deletes all lending records, parties, income, loans and instalments. "
+            "It cannot be undone. Download an Excel backup first."
         )
-        sure = st.checkbox("Haan, mujhe pata hai ki saara data delete ho jayega", key="wipe_sure")
-        word = st.text_input("Confirm ke liye DELETE likhiye", key="wipe_word", placeholder="DELETE")
+        sure = st.checkbox("I understand that all data will be deleted", key="wipe_sure")
+        word = st.text_input("Type DELETE to confirm", key="wipe_word", placeholder="DELETE")
         st.button(
-            "🗑️ Saara data delete karein", type="primary",
+            "Delete all data", type="primary",
             disabled=not (sure and word.strip().upper() == "DELETE"),
             on_click=wipe_callback,
         )
 
 
 def page_backup():
-    hero("💾 Backup / Restore", "Apna data surakshit rakhiye")
+    hero("Backup & restore", "Keep a safe copy of your records")
     if st.session_state.pop("wiped", False):
-        st.success("✅ Saara data delete ho gaya.")
+        st.success("All data has been deleted.")
     st.warning(
-        "Streamlit Cloud par app restart hone par database file mit sakti hai. "
-        "Isliye time-time par Excel backup download kar lijiye."
+        "On Streamlit Cloud the database file can be lost when the app restarts. "
+        "Download an Excel backup regularly."
     )
     df = txns_df()
     export = df[["party", "date", "kind", "amount", "note"]]
@@ -1026,17 +1047,17 @@ def page_backup():
     wipe_box = st.container()
     with wipe_box:
         wipe_section(
-            f"Abhi: {len(export)} udhari entries, {len(phones)} parties, "
-            f"{len(inc_export)} income entries, {len(loan_export)} loan, {len(pay_export)} kist/penalty"
+            f"Currently stored: {len(export)} lending entries, {len(phones)} parties, "
+            f"{len(inc_export)} income entries, {len(loan_export)} loans, {len(pay_export)} instalment/penalty payments"
         )
     with c1:
-        st.markdown("#### ⬇️ Backup lein")
+        st.markdown("#### Backup")
         st.caption(
-            f"{len(export)} udhari entries, {len(phones)} parties, "
-            f"{len(inc_export)} income entries, {len(loan_export)} loan"
+            f"{len(export)} lending entries, {len(phones)} parties, "
+            f"{len(inc_export)} income entries, {len(loan_export)} loans"
         )
         st.download_button(
-            "Excel backup download karein",
+            "Download Excel backup",
             to_xlsx_multi({
                 "Udhari": export, "Income": inc_export,
                 "Loan": loan_export, "Kist_Penalty": pay_export,
@@ -1045,31 +1066,33 @@ def page_backup():
             mime=XLSX_MIME, disabled=empty, type="primary",
         )
     with c2:
-        st.markdown("#### ⬆️ Restore karein")
+        st.markdown("#### Restore")
         st.download_button(
-            "📄 Restore ka format download karein (khali Excel)",
+            "Download blank restore template",
             template_xlsx(),
             file_name="udhari_restore_format.xlsx",
             mime=XLSX_MIME,
-            help="Isme data bharkar neeche upload karein. Andar 'Kaise bhare' sheet me poori guide hai.",
+            help="Fill in this template and upload it below. The Instructions sheet explains each column.",
         )
-        up = st.file_uploader("Backup Excel chuniye", type=["xlsx", "csv"], label_visibility="collapsed")
-        if up is not None and st.button("Restore karein"):
+        up = st.file_uploader("Select a backup file", type=["xlsx", "csv"], label_visibility="collapsed")
+        if up is not None and st.button("Restore"):
             sheets = read_backup_all(up)
             ud, ic, lo, kp = (sheets[k] for k in SHEETS)
             if all(x is None for x in (ud, ic, lo, kp)):
-                st.error("File me 'Udhari', 'Income', 'Loan' ya 'Kist_Penalty' sheet honi chahiye.")
+                st.error("The file must contain at least one of these sheets: Udhari, Income, Loan, Kist_Penalty.")
                 return
 
             msgs = []
             if ud is not None:
+                if "kind" in ud.columns:
+                    ud["kind"] = ud["kind"].replace(LEGACY_KINDS)
                 need = {"party", "date", "kind", "amount", "note"}
                 if not need.issubset(ud.columns):
-                    st.error("Udhari sheet me ye columns hone chahiye: party, date, kind, amount, note")
+                    st.error("The Udhari sheet must have these columns: party, date, kind, amount, note")
                     return
                 bad = set(ud["kind"]) - set(KINDS)
                 if bad:
-                    st.error(f"Anjaan 'kind' values: {', '.join(map(str, bad))}")
+                    st.error(f"Unrecognised 'kind' values: {', '.join(map(str, bad))}")
                     return
                 seen = {
                     (r.party, str(r.date), r.kind, round(float(r.amount), 2), str(r.note or ""))
@@ -1088,11 +1111,11 @@ def page_backup():
                     )
                     seen.add(key)
                     added += 1
-                msgs.append(f"Udhari: {added} entries jodi gayi, {skipped} pehle se maujood thi.")
+                msgs.append(f"Udhari: {added} entries added, {skipped} already present.")
 
             if ic is not None:
                 if not {"date", "amount", "source", "note"}.issubset(ic.columns):
-                    st.error("Income sheet me ye columns hone chahiye: date, amount, source, note")
+                    st.error("The Income sheet must have these columns: date, amount, source, note")
                     return
                 have = {(str(r.date), round(float(r.amount), 2), str(r.source), str(r.note)) for r in inc.itertuples()}
                 added = skipped = 0
@@ -1105,11 +1128,11 @@ def page_backup():
                         (key[0], float(r["amount"]), key[2], key[3]))
                     have.add(key)
                     added += 1
-                msgs.append(f"Income: {added} entries jodi gayi, {skipped} pehle se maujood thi.")
+                msgs.append(f"Income: {added} entries added, {skipped} already present.")
 
             if lo is not None:
                 if not set(LOAN_COLS).issubset(lo.columns):
-                    st.error("Loan sheet me ye columns hone chahiye: " + ", ".join(LOAN_COLS))
+                    st.error("The Loan sheet must have these columns: " + ", ".join(LOAN_COLS))
                     return
                 names = {str(n).lower() for n in loans["name"]}
                 added = skipped = bad = 0
@@ -1137,12 +1160,12 @@ def page_backup():
                     names.add(nm.lower())
                     added += 1
                 msgs.append(
-                    f"Loan: {added} jode gaye, {skipped} pehle se maujood, {bad} galat row chhodi."
+                    f"Loan: {added} added, {skipped} already present, {bad} invalid rows skipped."
                 )
 
             if kp is not None:
                 if not set(PAY_COLS).issubset(kp.columns):
-                    st.error("Kist_Penalty sheet me ye columns hone chahiye: " + ", ".join(PAY_COLS))
+                    st.error("The Kist_Penalty sheet must have these columns: " + ", ".join(PAY_COLS))
                     return
                 ids = {str(r["name"]).lower(): int(r["id"]) for r in loans_df().to_dict("records")}
                 have = {
@@ -1172,7 +1195,7 @@ def page_backup():
                     have.add(key)
                     added += 1
                 msgs.append(
-                    f"Kist/Penalty: {added} jodi gayi, {skipped} pehle se maujood, {bad} galat row chhodi."
+                    f"Instalments/penalties: {added} added, {skipped} already present, {bad} invalid rows skipped."
                 )
 
             st.success("  \n".join(msgs))
@@ -1186,15 +1209,15 @@ def main():
         return
     if "page" not in st.session_state or st.session_state["page"] not in PAGES:
         st.session_state["page"] = P_DASH
-    st.sidebar.markdown('<div class="brand">📒 Udhari Khata</div>', unsafe_allow_html=True)
-    st.sidebar.caption("Hisab saaf, rishte saaf")
+    st.sidebar.markdown('<div class="brand">Udhari Khata</div>', unsafe_allow_html=True)
+    st.sidebar.caption("Personal ledger")
     st.sidebar.radio("Menu", PAGES, key="page", label_visibility="collapsed")
 
     s = summary_df()
     if not s.empty and s["entries"].sum() > 0:
         st.sidebar.divider()
         st.sidebar.metric("Net balance", inr(s["balance"].sum()))
-        st.sidebar.caption(f"{len(s)} parties · {int(s['entries'].sum())} entries")
+        st.sidebar.caption(f"{len(s)} parties, {int(s['entries'].sum())} entries")
 
     {
         P_DASH: page_dashboard,
