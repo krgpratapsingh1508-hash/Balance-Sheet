@@ -7,6 +7,7 @@ import sqlite3
 from contextlib import closing
 from datetime import date
 from html import escape
+from io import BytesIO
 from pathlib import Path
 
 import altair as alt
@@ -147,6 +148,33 @@ def hero(title, subtitle):
     st.markdown(
         f'<div class="hero"><h1>{title}</h1><p>{subtitle}</p></div>', unsafe_allow_html=True
     )
+
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def to_xlsx(df, sheet="Backup"):
+    """DataFrame ko Excel (.xlsx) bytes me badalta hai."""
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        df.to_excel(w, index=False, sheet_name=sheet)
+        ws = w.sheets[sheet]
+        for i, col in enumerate(df.columns, start=1):
+            width = max([len(str(col))] + [len(str(v)) for v in df[col].head(200)]) + 2
+            ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = min(width, 45)
+    return buf.getvalue()
+
+
+def read_backup(f):
+    """Upload ki gayi Excel (.xlsx) ya purani CSV file padhta hai."""
+    if f.name.lower().endswith(".csv"):
+        d = pd.read_csv(f)
+    else:
+        d = pd.read_excel(f, dtype={"date": str})
+    d = d.fillna("")
+    if "date" in d.columns:
+        d["date"] = d["date"].astype(str).str[:10]
+    return d
 
 
 # ---------------------------------------------------------------- database
@@ -481,19 +509,19 @@ def page_backup():
         st.markdown("#### ⬇️ Backup lein")
         st.caption(f"{len(export)} entries, {len(phones)} parties")
         st.download_button(
-            "CSV backup download karein",
-            export.to_csv(index=False).encode("utf-8"),
-            file_name=f"udhari_backup_{date.today().isoformat()}.csv",
-            mime="text/csv", disabled=export.empty, type="primary",
+            "Excel backup download karein",
+            to_xlsx(export, "Udhari"),
+            file_name=f"udhari_backup_{date.today().isoformat()}.xlsx",
+            mime=XLSX_MIME, disabled=export.empty, type="primary",
         )
     with c2:
         st.markdown("#### ⬆️ Restore karein")
-        up = st.file_uploader("Backup CSV chuniye", type="csv", label_visibility="collapsed")
+        up = st.file_uploader("Backup Excel chuniye", type=["xlsx", "csv"], label_visibility="collapsed")
         if up is not None and st.button("Restore karein"):
-            data = pd.read_csv(up).fillna("")
+            data = read_backup(up)
             need = {"party", "date", "kind", "amount", "note"}
             if not need.issubset(data.columns):
-                st.error("CSV me ye columns hone chahiye: party, date, kind, amount, note")
+                st.error("File me ye columns hone chahiye: party, date, kind, amount, note")
                 return
             bad = set(data["kind"]) - set(KINDS)
             if bad:
@@ -525,18 +553,18 @@ def page_backup():
         st.markdown("#### 💵 Income backup")
         st.caption(f"{len(inc)} income entries")
         st.download_button(
-            "Income CSV backup",
-            inc[["date", "amount", "source", "note"]].to_csv(index=False).encode("utf-8"),
-            file_name=f"income_backup_{date.today().isoformat()}.csv",
-            mime="text/csv", disabled=inc.empty,
+            "Income Excel backup",
+            to_xlsx(inc[["date", "amount", "source", "note"]], "Income"),
+            file_name=f"income_backup_{date.today().isoformat()}.xlsx",
+            mime=XLSX_MIME, disabled=inc.empty,
         )
     with i2:
         st.markdown("#### 💵 Income restore")
-        iup = st.file_uploader("Income CSV chuniye", type="csv", key="inc_up", label_visibility="collapsed")
+        iup = st.file_uploader("Income Excel chuniye", type=["xlsx", "csv"], key="inc_up", label_visibility="collapsed")
         if iup is not None and st.button("Income restore karein"):
-            d = pd.read_csv(iup).fillna("")
+            d = read_backup(iup)
             if not {"date", "amount", "source", "note"}.issubset(d.columns):
-                st.error("CSV me ye columns hone chahiye: date, amount, source, note")
+                st.error("File me ye columns hone chahiye: date, amount, source, note")
             else:
                 have = {(str(r.date), round(float(r.amount), 2), str(r.source), str(r.note)) for r in inc.itertuples()}
                 added = 0
