@@ -1,12 +1,13 @@
-"""Udhari Khata v2 - paise ke len-den aur udhari ka hisab rakhne wala Streamlit app."""
+"""Udhari Khata v2 - paise ke len-den aur udhari ka hisab rakhne wala Streamlit app.
+Sirf 3 pages: Dashboard, Nayi Entry, Backup / Restore.
+"""
 
 import hmac
 import sqlite3
 from contextlib import closing
-from datetime import date, timedelta
+from datetime import date
 from html import escape
 from pathlib import Path
-from urllib.parse import quote
 
 import altair as alt
 import pandas as pd
@@ -34,11 +35,8 @@ BLUE = "#4f46e5"
 
 P_DASH = "🏠  Dashboard"
 P_NEW = "➕  Nayi Entry"
-P_PARTY = "👤  Party Khata"
-P_ALL = "📋  Saari Entries"
-P_SAL = "💼  Salary"
 P_BACKUP = "💾  Backup / Restore"
-PAGES = [P_DASH, P_NEW, P_PARTY, P_ALL, P_SAL, P_BACKUP]
+PAGES = [P_DASH, P_NEW, P_BACKUP]
 
 st.set_page_config(page_title="Udhari Khata", page_icon="📒", layout="wide")
 
@@ -91,15 +89,6 @@ CSS = f"""
 .act .s {{ font-size: .76rem; opacity: .6; }}
 .act .a {{ font-weight: 800; white-space: nowrap; }}
 .pos {{ color: {GREEN}; }} .neg {{ color: {RED}; }}
-
-.balbox {{
-    border-radius: 20px; padding: 20px 24px; margin: 6px 0 14px; color: #fff;
-}}
-.balbox.g {{ background: linear-gradient(135deg, #16a34a, #22c55e); }}
-.balbox.r {{ background: linear-gradient(135deg, #dc2626, #f97316); }}
-.balbox.z {{ background: linear-gradient(135deg, #64748b, #94a3b8); }}
-.balbox .t {{ opacity: .9; font-size: .92rem; }}
-.balbox .v {{ font-size: 2.2rem; font-weight: 800; }}
 
 section[data-testid="stSidebar"] .brand {{ font-size: 1.35rem; font-weight: 800; margin-bottom: 4px; }}
 div[data-testid="stForm"] {{ border-radius: 18px; }}
@@ -155,15 +144,6 @@ def hero(title, subtitle):
     )
 
 
-def whatsapp_link(phone, text):
-    digits = "".join(ch for ch in phone if ch.isdigit())
-    if len(digits) == 10:
-        digits = "91" + digits
-    if len(digits) < 11:
-        return None
-    return f"https://wa.me/{digits}?text={quote(text)}"
-
-
 # ---------------------------------------------------------------- database
 def run(sql, params=()):
     with closing(sqlite3.connect(DB_PATH)) as c:
@@ -195,22 +175,9 @@ def init_db():
                 amount REAL NOT NULL CHECK(amount > 0),
                 note TEXT DEFAULT ''
             );
-            CREATE TABLE IF NOT EXISTS salary(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sdate TEXT NOT NULL,
-                amount REAL NOT NULL CHECK(amount > 0),
-                source TEXT DEFAULT '',
-                note TEXT DEFAULT ''
-            );
             """
         )
         c.commit()
-
-
-def salary_df():
-    df = query_df("SELECT id, sdate AS date, amount, source, note FROM salary ORDER BY sdate, id")
-    df["month"] = df["date"].str[:7]
-    return df
 
 
 def get_or_create_party(name, phone=""):
@@ -228,17 +195,12 @@ def parties_df():
     return query_df("SELECT id, name, phone FROM parties ORDER BY name COLLATE NOCASE")
 
 
-def txns_df(party_id=None):
-    sql = (
+def txns_df():
+    df = query_df(
         "SELECT t.id, t.party_id, p.name AS party, t.tdate AS date, t.kind, "
-        "t.amount, t.note FROM txns t JOIN parties p ON p.id = t.party_id"
+        "t.amount, t.note FROM txns t JOIN parties p ON p.id = t.party_id "
+        "ORDER BY t.tdate, t.id"
     )
-    params = ()
-    if party_id is not None:
-        sql += " WHERE t.party_id = ?"
-        params = (int(party_id),)
-    sql += " ORDER BY t.tdate, t.id"
-    df = query_df(sql, params)
     df["signed"] = df["amount"] * df["kind"].map(KINDS)
     return df
 
@@ -285,7 +247,7 @@ def check_password():
 def go(page, party=None):
     st.session_state["page"] = page
     if party is not None:
-        st.session_state["sel_party"] = party
+        st.session_state["prefill_party"] = party
 
 
 # ---------------------------------------------------------------- pages
@@ -302,8 +264,8 @@ def party_card(r, key):
             unsafe_allow_html=True,
         )
         st.button(
-            "Khata kholein →", key=key, use_container_width=True,
-            on_click=go, args=(P_PARTY, r["name"]),
+            "➕ Is party ki entry", key=key, use_container_width=True,
+            on_click=go, args=(P_NEW, r["name"]),
         )
 
 
@@ -321,17 +283,11 @@ def page_dashboard():
     n_mil = int((s["balance"] > 0).sum())
     n_den = int((s["balance"] < 0).sum())
 
-    sal = salary_df()
-    this_month = sal.loc[sal["month"] == date.today().strftime("%Y-%m"), "amount"].sum()
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     c1.markdown(kpi("💰 Aapko milna hai", inr(milna), f"{n_mil} logon se", "g"), unsafe_allow_html=True)
     c2.markdown(kpi("🧾 Aapko dena hai", inr(dena), f"{n_den} logon ko", "r"), unsafe_allow_html=True)
     c3.markdown(
         kpi("⚖️ Net balance", inr(milna - dena), "milna − dena", "b"), unsafe_allow_html=True
-    )
-    c4.markdown(
-        kpi("💼 Is mahine ki salary", inr(this_month), date.today().strftime("%B %Y"), "b"),
-        unsafe_allow_html=True,
     )
     st.write("")
 
@@ -436,238 +392,6 @@ def page_new_entry():
             st.toast("Entry save ho gayi", icon="✅")
 
 
-def edit_entry_ui(df):
-    with st.expander("✏️ Entry badlein ya hataiye"):
-        labels = {
-            int(r["id"]): f"{r['date']} · {r['kind']} · {inr(r['amount'])}"
-            + (f" · {r['note']}" if r["note"] else "")
-            for _, r in df.iterrows()
-        }
-        eid = st.selectbox("Entry chuniye", list(labels.keys())[::-1], format_func=labels.get)
-        r = df[df["id"] == eid].iloc[0]
-        with st.form(f"edit_{eid}"):
-            kind = st.selectbox("Kism", list(KINDS.keys()), index=list(KINDS).index(r["kind"]))
-            c1, c2 = st.columns(2)
-            amount = c1.number_input("Rakam (₹)", min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
-            tdate = c2.date_input("Tarikh", value=date.fromisoformat(str(r["date"])))
-            note = st.text_input("Note", value=r["note"] or "")
-            save = st.form_submit_button("Badlav save karein", type="primary")
-        if save:
-            if amount <= 0:
-                st.error("Rakam 0 se zyada honi chahiye.")
-            else:
-                run(
-                    "UPDATE txns SET tdate=?, kind=?, amount=?, note=? WHERE id=?",
-                    (tdate.isoformat(), kind, float(amount), note.strip(), int(eid)),
-                )
-                st.rerun()
-        sure = st.checkbox("Haan, ye entry delete karni hai", key=f"sure_{eid}")
-        if st.button("🗑️ Entry delete karein", disabled=not sure, key=f"del_{eid}"):
-            run("DELETE FROM txns WHERE id = ?", (int(eid),))
-            st.rerun()
-
-
-def page_party():
-    hero("👤 Party Khata", "Ek party ka poora hisab, tarikh ke saath")
-    parties = parties_df()
-    if parties.empty:
-        st.info("Pehle koi entry daaliye.")
-        return
-    names = parties["name"].tolist()
-    if st.session_state.get("sel_party") not in names:
-        st.session_state["sel_party"] = names[0]
-    name = st.selectbox("Party chuniye", names, key="sel_party")
-    row = parties[parties["name"] == name].iloc[0]
-    pid = int(row["id"])
-
-    df = txns_df(pid)
-    balance = df["signed"].sum()
-    cls, label = status_of(balance)
-    st.markdown(
-        f'<div class="balbox {cls}"><div class="t">{escape(name)} · {label}</div>'
-        f'<div class="v">{inr(abs(balance))}</div></div>',
-        unsafe_allow_html=True,
-    )
-
-    a, b, c = st.columns([1, 1, 2])
-    a.button("➕ Is party ki entry", on_click=lambda: (st.session_state.update(prefill_party=name), go(P_NEW)),
-             use_container_width=True, type="primary")
-    if balance > 0:
-        msg = (f"Namaste {name} ji, aapke {inr(balance)} mere paas baaki hain. "
-               f"Jab suvidha ho wapas kar dijiye. Dhanyavaad 🙏")
-        link = whatsapp_link(row["phone"] or "", msg)
-        if link:
-            b.link_button("💬 WhatsApp yaad dilayein", link, use_container_width=True)
-        else:
-            b.caption("WhatsApp ke liye phone number daaliye →")
-    with c.expander("📞 Phone / party settings"):
-        new_phone = st.text_input("Phone", value=row["phone"] or "", key=f"ph_{pid}")
-        if st.button("Phone save karein", key=f"phs_{pid}"):
-            run("UPDATE parties SET phone = ? WHERE id = ?", (new_phone.strip(), pid))
-            st.rerun()
-        st.divider()
-        sure = st.checkbox(f"{name} aur uski saari entries hamesha ke liye delete karein", key=f"ps_{pid}")
-        if st.button("🗑️ Party delete karein", disabled=not sure, key=f"pd_{pid}"):
-            run("DELETE FROM parties WHERE id = ?", (pid,))
-            st.rerun()
-
-    if df.empty:
-        st.caption("Is party ki abhi koi entry nahi hai.")
-        return
-
-    view = df.copy()
-    view["Balance"] = view["signed"].cumsum()
-    view["Kism"] = view["kind"].map(lambda k: f"{KIND_ICON[k]} {k}")
-    view = view[["id", "date", "Kism", "amount", "note", "Balance"]].rename(
-        columns={"id": "ID", "date": "Tarikh", "amount": "Rakam", "note": "Note"}
-    )
-    st.dataframe(
-        view.iloc[::-1],
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Rakam": st.column_config.NumberColumn(format="₹%.2f"),
-            "Balance": st.column_config.NumberColumn(format="₹%.2f", help="+ = aapko milna, − = aapko dena"),
-        },
-    )
-    st.download_button(
-        "⬇️ Is party ka CSV", df[["date", "kind", "amount", "note"]].to_csv(index=False).encode("utf-8"),
-        file_name=f"{name}_khata.csv", mime="text/csv",
-    )
-    edit_entry_ui(df)
-
-
-def page_all():
-    hero("📋 Saari Entries", "Filter lagaiye, dhundhiye, download kijiye")
-    df = txns_df()
-    if df.empty:
-        st.info("Koi entry nahi hai.")
-        return
-    d = pd.to_datetime(df["date"])
-    f1, f2, f3 = st.columns([1.2, 1.2, 1])
-    rng = f1.date_input("Tarikh range", value=(d.min().date(), max(d.max().date(), date.today())))
-    kinds = f2.multiselect("Kism", list(KINDS.keys()), default=list(KINDS.keys()))
-    q = f3.text_input("🔍 Naam / note")
-
-    v = df[df["kind"].isin(kinds)]
-    if isinstance(rng, (list, tuple)) and len(rng) == 2:
-        dd = pd.to_datetime(v["date"]).dt.date
-        v = v[(dd >= rng[0]) & (dd <= rng[1])]
-    if q.strip():
-        m = v["party"].str.contains(q.strip(), case=False, regex=False) | v["note"].fillna("").str.contains(
-            q.strip(), case=False, regex=False)
-        v = v[m]
-
-    diya = v.loc[v["kind"] == "Maine udhar diya", "amount"].sum()
-    mila = v.loc[v["kind"] == "Mujhe paise wapas mile", "amount"].sum()
-    liya = v.loc[v["kind"] == "Maine udhar liya", "amount"].sum()
-    lauta = v.loc[v["kind"] == "Maine paise wapas diye", "amount"].sum()
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("📤 Udhar diya", inr(diya))
-    k2.metric("📥 Wapas mile", inr(mila))
-    k3.metric("🤝 Udhar liya", inr(liya))
-    k4.metric("💸 Wapas diye", inr(lauta))
-
-    show = v.drop(columns=["party_id", "signed"]).rename(
-        columns={"id": "ID", "party": "Party", "date": "Tarikh", "kind": "Kism", "amount": "Rakam", "note": "Note"}
-    )
-    st.caption(f"{len(show)} entries")
-    st.dataframe(
-        show.iloc[::-1], use_container_width=True, hide_index=True,
-        column_config={"Rakam": st.column_config.NumberColumn(format="₹%.2f")},
-    )
-    st.download_button("⬇️ Filtered CSV", show.to_csv(index=False).encode("utf-8"),
-                       file_name="udhari_entries.csv", mime="text/csv", disabled=show.empty)
-
-
-def page_salary():
-    hero("💼 Salary", "Har mahine ki salary ka hisab, total aur chart")
-    with st.form("sal_form", clear_on_submit=True):
-        a, b, c = st.columns(3)
-        amount = a.number_input("Salary (₹)", min_value=0.0, step=500.0, format="%.2f")
-        sdate = b.date_input("Kis tarikh ko mili", value=date.today())
-        source = c.text_input("Kahan se (optional)", placeholder="jaise: Company / Dukaan")
-        note = st.text_input("Note (optional)", placeholder="jaise: bonus / overtime / advance kata")
-        ok = st.form_submit_button("💾 Salary save karein", type="primary", use_container_width=True)
-    if ok:
-        if amount <= 0:
-            st.error("Rakam 0 se zyada honi chahiye.")
-        else:
-            run(
-                "INSERT INTO salary(sdate, amount, source, note) VALUES (?,?,?,?)",
-                (sdate.isoformat(), float(amount), source.strip(), note.strip()),
-            )
-            st.toast("Salary save ho gayi", icon="✅")
-            st.rerun()
-
-    df = salary_df()
-    if df.empty:
-        st.info("Abhi koi salary entry nahi hai. Upar se pehli salary daaliye.")
-        return
-
-    today = date.today()
-    this_month = df.loc[df["month"] == today.strftime("%Y-%m"), "amount"].sum()
-    this_year = df.loc[df["month"].str[:4] == str(today.year), "amount"].sum()
-    monthly = df.groupby("month")["amount"].sum().reset_index()
-    avg = monthly["amount"].mean()
-
-    k1, k2, k3, k4 = st.columns(4)
-    k1.markdown(kpi("Is mahine", inr(this_month), today.strftime("%B %Y"), "g"), unsafe_allow_html=True)
-    k2.markdown(kpi("Is saal ki total", inr(this_year), str(today.year), "b"), unsafe_allow_html=True)
-    k3.markdown(kpi("Mahine ka average", inr(avg), f"{len(monthly)} mahine ke hisab se", "b"), unsafe_allow_html=True)
-    k4.markdown(kpi("Ab tak ki total", inr(df["amount"].sum()), f"{len(df)} entries", "g"), unsafe_allow_html=True)
-    st.write("")
-
-    st.subheader("Mahine-wise salary")
-    last12 = monthly.tail(12)
-    chart = (
-        alt.Chart(last12)
-        .mark_bar(cornerRadiusEnd=6, color=BLUE)
-        .encode(
-            x=alt.X("month:N", title=None, sort=None),
-            y=alt.Y("amount:Q", title="Rakam (₹)"),
-            tooltip=[alt.Tooltip("month:N", title="Mahina"), alt.Tooltip("amount:Q", title="Salary", format=",.2f")],
-        )
-        .properties(height=260)
-    )
-    st.altair_chart(chart, use_container_width=True)
-
-    st.subheader("Saari salary entries")
-    view = df.rename(
-        columns={"id": "ID", "date": "Tarikh", "amount": "Rakam", "source": "Kahan se", "note": "Note"}
-    )[["ID", "Tarikh", "Rakam", "Kahan se", "Note"]]
-    st.dataframe(
-        view.iloc[::-1], use_container_width=True, hide_index=True,
-        column_config={"Rakam": st.column_config.NumberColumn(format="₹%.2f")},
-    )
-    st.download_button("⬇️ Salary CSV", view.to_csv(index=False).encode("utf-8"),
-                       file_name="salary.csv", mime="text/csv")
-
-    with st.expander("✏️ Salary entry badlein ya hataiye"):
-        labels = {int(r["id"]): f"{r['date']} · {inr(r['amount'])}" + (f" · {r['source']}" if r["source"] else "")
-                  for _, r in df.iterrows()}
-        sid = st.selectbox("Entry chuniye", list(labels.keys())[::-1], format_func=labels.get)
-        r = df[df["id"] == sid].iloc[0]
-        with st.form(f"sal_edit_{sid}"):
-            c1, c2 = st.columns(2)
-            amt = c1.number_input("Rakam (₹)", min_value=0.0, value=float(r["amount"]), step=500.0, format="%.2f")
-            sd = c2.date_input("Tarikh", value=date.fromisoformat(str(r["date"])))
-            src = st.text_input("Kahan se", value=r["source"] or "")
-            nt = st.text_input("Note", value=r["note"] or "")
-            save = st.form_submit_button("Badlav save karein", type="primary")
-        if save:
-            if amt <= 0:
-                st.error("Rakam 0 se zyada honi chahiye.")
-            else:
-                run("UPDATE salary SET sdate=?, amount=?, source=?, note=? WHERE id=?",
-                    (sd.isoformat(), float(amt), src.strip(), nt.strip(), int(sid)))
-                st.rerun()
-        sure = st.checkbox("Haan, ye entry delete karni hai", key=f"ssure_{sid}")
-        if st.button("🗑️ Delete karein", disabled=not sure, key=f"sdel_{sid}"):
-            run("DELETE FROM salary WHERE id = ?", (int(sid),))
-            st.rerun()
-
-
 def page_backup():
     hero("💾 Backup / Restore", "Apna data surakshit rakhiye")
     st.warning(
@@ -719,36 +443,6 @@ def page_backup():
                 added += 1
             st.success(f"{added} entries jodi gayi, {skipped} pehle se maujood thi (duplicate nahi banayi).")
 
-    st.divider()
-    s1, s2 = st.columns(2)
-    sal = salary_df()
-    with s1:
-        st.markdown("#### 💼 Salary backup")
-        st.caption(f"{len(sal)} salary entries")
-        st.download_button(
-            "Salary CSV backup", sal[["date", "amount", "source", "note"]].to_csv(index=False).encode("utf-8"),
-            file_name=f"salary_backup_{date.today().isoformat()}.csv", mime="text/csv", disabled=sal.empty,
-        )
-    with s2:
-        st.markdown("#### 💼 Salary restore")
-        sup = st.file_uploader("Salary CSV chuniye", type="csv", key="sal_up", label_visibility="collapsed")
-        if sup is not None and st.button("Salary restore karein"):
-            d = pd.read_csv(sup).fillna("")
-            if not {"date", "amount", "source", "note"}.issubset(d.columns):
-                st.error("CSV me ye columns hone chahiye: date, amount, source, note")
-                return
-            have = {(str(r.date), round(float(r.amount), 2), str(r.source), str(r.note)) for r in sal.itertuples()}
-            added = 0
-            for _, r in d.iterrows():
-                key = (str(r["date"]), round(float(r["amount"]), 2), str(r["source"]), str(r["note"]))
-                if key in have:
-                    continue
-                run("INSERT INTO salary(sdate, amount, source, note) VALUES (?,?,?,?)",
-                    (key[0], float(r["amount"]), key[2], key[3]))
-                have.add(key)
-                added += 1
-            st.success(f"{added} salary entries jodi gayi.")
-
 
 # ---------------------------------------------------------------- main
 def main():
@@ -756,7 +450,7 @@ def main():
     st.markdown(CSS, unsafe_allow_html=True)
     if not check_password():
         return
-    if "page" not in st.session_state:
+    if "page" not in st.session_state or st.session_state["page"] not in PAGES:
         st.session_state["page"] = P_DASH
     st.sidebar.markdown('<div class="brand">📒 Udhari Khata</div>', unsafe_allow_html=True)
     st.sidebar.caption("Hisab saaf, rishte saaf")
@@ -771,9 +465,6 @@ def main():
     {
         P_DASH: page_dashboard,
         P_NEW: page_new_entry,
-        P_PARTY: page_party,
-        P_ALL: page_all,
-        P_SAL: page_salary,
         P_BACKUP: page_backup,
     }[st.session_state["page"]]()
 
