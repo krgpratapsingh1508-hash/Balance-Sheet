@@ -7,7 +7,7 @@ import calendar
 import hmac
 import re
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor
+import time
 from contextlib import closing
 from datetime import date
 from html import escape
@@ -1561,32 +1561,67 @@ def _tr_fetch(text, lang):
     return GoogleTranslator(source="auto", target=lang).translate(text)
 
 
+def _tr_save(lang, pairs):
+    mem = _tr_mem(lang)
+    pairs = [(c, o) for c, o in pairs if o]
+    for c, o in pairs:
+        mem[c] = o
+    with closing(sqlite3.connect(DB_PATH)) as con:
+        con.executemany("INSERT OR REPLACE INTO tr_cache(lang, src, out) VALUES (?,?,?)",
+                        [(lang, c, o) for c, o in pairs])
+        con.commit()
+
+
+def _tr_batch(cores, lang, progress=None):
+    """Translate many short texts with few requests (joined by newlines), pausing between requests.
+
+    Google allows only ~5 requests per second, so one request per text is too many.
+    Raises on a Google error; whatever was translated before the error stays saved.
+    """
+    mem = _tr_mem(lang)
+    need = [c for c in dict.fromkeys(cores) if c not in mem]
+    groups, cur, size = [], [], 0
+    for c in need:
+        if "\n" in c:
+            groups.append([c])
+            continue
+        if cur and (size + len(c) > 3500 or len(cur) >= 40):
+            groups.append(cur)
+            cur, size = [], 0
+        cur.append(c)
+        size += len(c) + 1
+    if cur:
+        groups.append(cur)
+    for gi, grp in enumerate(groups):
+        out = _tr_fetch("\n".join(grp), lang) or ""
+        parts = out.split("\n")
+        if len(grp) == 1:
+            _tr_save(lang, [(grp[0], out.strip())])
+        elif len(parts) == len(grp):
+            _tr_save(lang, [(c, p.strip()) for c, p in zip(grp, parts)])
+        else:  # lines got merged or split: do this group one by one, slowly
+            for c in grp:
+                time.sleep(0.4)
+                _tr_save(lang, [(c, (_tr_fetch(c, lang) or "").strip())])
+        if progress:
+            progress((gi + 1) / len(groups))
+        time.sleep(0.5)
+
+
 def _tr_resolve(cores, lang):
-    """Translate a list of short texts (cache first, the rest fetched in parallel)."""
+    """Translate texts that are not cached yet (normally few, as the cache is pre-filled)."""
     mem = _tr_mem(lang)
     need = [c for c in dict.fromkeys(cores) if c not in mem]
     if need and not st.session_state.get("_tr_fail"):
-        def work(c):
-            try:
-                return c, _tr_fetch(c, lang), None
-            except Exception as exc:  # no internet, package missing, rate limit ...
-                return c, None, exc
-        with ThreadPoolExecutor(max_workers=min(8, len(need))) as ex:
-            results = list(ex.map(work, need))
-        for c, out, err in results:
-            if err is not None:
-                st.session_state["_tr_fail"] = str(err)[:200] or "error"
-            elif out:
-                mem[c] = out
-                run("INSERT OR REPLACE INTO tr_cache(lang, src, out) VALUES (?,?,?)", (lang, c, out))
+        try:
+            _tr_batch(need, lang)
+        except Exception as exc:  # no internet, package missing, rate limit ...
+            st.session_state["_tr_fail"] = str(exc)[:200] or "error"
     return {c: mem.get(c, c) for c in cores}
 
 
-def tr(s):
-    """Translate visible text into the site language. Numbers, dates and HTML tags are kept."""
-    lang = site_lang()
-    if lang == "en" or not isinstance(s, str) or "<style" in s or not _LETTER.search(s):
-        return s
+def _segs(s):
+    """Split a text into (translate?, piece) parts. Tags and numbers are kept as they are."""
     segs = []
     for i, part in enumerate(_TAG.split(s)):
         if i % 2:
@@ -1597,6 +1632,29 @@ def tr(s):
                 segs.append((0, piece))
             else:
                 segs.append((1, re.match(r"^(\s*)(.*?)(\s*)$", piece, re.S).groups()))
+    return segs
+
+
+def prewarm_language(lang, progress=None):
+    """Translate every text written in this app's source in a few requests and save it."""
+    import ast
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    cores = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            s = node.value
+            if len(s) > 400 or "<style" in s or not _LETTER.search(s):
+                continue
+            cores += [g[1] for k, g in _segs(s) if k]
+    _tr_batch(cores, lang, progress)
+
+
+def tr(s):
+    """Translate visible text into the site language. Numbers, dates and HTML tags are kept."""
+    lang = site_lang()
+    if lang == "en" or not isinstance(s, str) or "<style" in s or not _LETTER.search(s):
+        return s
+    segs = _segs(s)
     done = _tr_resolve([g[1] for k, g in segs if k], lang)
     return "".join(g if not k else g[0] + done[g[1]] + g[2] for k, g in segs)
 
@@ -1672,6 +1730,17 @@ def admin_translate():
     pick = st.selectbox("Language", names, index=names.index(LANG_NAMES.get(cur, "English")), key="site_lang_pick")
     a, b = st.columns(2)
     if a.button("Apply and lock language", type="primary", use_container_width=True):
+        if LANGS[pick] != "en":
+            bar = st.progress(0.0, text="Translating the site text, please wait...")
+            try:
+                prewarm_language(LANGS[pick], lambda f: bar.progress(f, text="Translating the site text, please wait..."))
+            except Exception as exc:
+                bar.empty()
+                st.error(
+                    f"Translation could not finish: {str(exc)[:200]}. "
+                    "Wait a minute and press Apply again; the part already translated is kept."
+                )
+                return
         set_setting("site_lang", LANGS[pick])
         st.session_state["flash"] = f"Site language is now {pick}."
         st.rerun()
