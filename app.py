@@ -2,6 +2,7 @@
 Sirf 3 pages: Dashboard, Nayi Entry, Backup / Restore.
 """
 
+import calendar
 import hmac
 import sqlite3
 from contextlib import closing
@@ -191,6 +192,25 @@ def init_db():
                 source TEXT DEFAULT '',
                 note TEXT DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS loans(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL COLLATE NOCASE,
+                loan_amount REAL DEFAULT 0,
+                kist_amount REAL NOT NULL CHECK(kist_amount > 0),
+                total_kists INTEGER NOT NULL CHECK(total_kists >= 1),
+                first_due TEXT NOT NULL,
+                penalty_type TEXT NOT NULL DEFAULT 'fixed',
+                penalty_amount REAL NOT NULL DEFAULT 0,
+                note TEXT DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS loan_payments(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                loan_id INTEGER NOT NULL REFERENCES loans(id) ON DELETE CASCADE,
+                pdate TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                amount REAL NOT NULL CHECK(amount > 0),
+                note TEXT DEFAULT ''
+            );
             """
         )
         c.commit()
@@ -225,6 +245,76 @@ def income_df():
     df = query_df("SELECT id, idate AS date, amount, source, note FROM income ORDER BY idate, id")
     df["month"] = df["date"].str[:7]
     return df
+
+
+LOAN_PEN_TYPES = {
+    "fixed": "Fixed (har late kist par ek baar)",
+    "daily": "Per din (har din ki der par)",
+}
+
+
+def add_months(d, n):
+    """Date d se n mahine aage (din wahi rehta hai, mahina chhota ho to aakhri din)."""
+    y, m = divmod(d.month - 1 + n, 12)
+    year, month = d.year + y, m + 1
+    return date(year, month, min(d.day, calendar.monthrange(year, month)[1]))
+
+
+def loans_df():
+    return query_df(
+        "SELECT id, name, loan_amount, kist_amount, total_kists, first_due, "
+        "penalty_type, penalty_amount, note FROM loans ORDER BY id"
+    )
+
+
+def loan_pay_df():
+    return query_df(
+        "SELECT p.id, p.loan_id, l.name AS loan, p.pdate AS date, p.kind, p.amount, p.note "
+        "FROM loan_payments p JOIN loans l ON l.id = p.loan_id ORDER BY p.pdate, p.id"
+    )
+
+
+def loan_schedule(loan, pays, today):
+    """Har kist ki due date, kab bhari, kitne din late aur penalty."""
+    kist = float(loan["kist_amount"])
+    n = int(loan["total_kists"])
+    first = date.fromisoformat(str(loan["first_due"])[:10])
+    pen = float(loan["penalty_amount"])
+    daily = loan["penalty_type"] == "daily"
+    events, cum = [], 0.0
+    for r in pays[pays["kind"] == "kist"].itertuples():
+        cum += float(r.amount)
+        events.append((date.fromisoformat(str(r.date)[:10]), cum))
+    rows = []
+    for i in range(1, n + 1):
+        due = add_months(first, i - 1)
+        # i-vi kist tab bhari maani jaati hai jab ab tak ki total kist-rakam i*kist tak pahunch jaye
+        paid_on = next((d for d, c in events if c >= kist * i - 0.005), None)
+        late = max(((paid_on or today) - due).days, 0)
+        penalty = (pen * late if daily else pen) if late > 0 else 0.0
+        rows.append({"no": i, "due": due, "paid_on": paid_on, "late": late, "penalty": penalty})
+    return rows
+
+
+def loan_summary(loan, pays, today):
+    rows = loan_schedule(loan, pays, today)
+    kist = float(loan["kist_amount"])
+    n = int(loan["total_kists"])
+    paid = float(pays.loc[pays["kind"] == "kist", "amount"].sum())
+    pen_paid = float(pays.loc[pays["kind"] == "penalty", "amount"].sum())
+    pen_total = sum(r["penalty"] for r in rows)
+    return {
+        "rows": rows,
+        "paid": paid,
+        "total": kist * n,
+        "pending": max(kist * n - paid, 0.0),
+        "paid_cnt": min(int((paid + 0.005) // kist), n),
+        "pen_total": pen_total,
+        "pen_paid": pen_paid,
+        "pen_due": max(pen_total - pen_paid, 0.0),
+        "overdue": [r for r in rows if r["paid_on"] is None and r["due"] < today],
+        "next": next((r for r in rows if r["paid_on"] is None), None),
+    }
 
 
 def summary_df():
@@ -291,11 +381,84 @@ def party_card(r, key):
         )
 
 
+def loan_section():
+    loans = loans_df()
+    if loans.empty:
+        return
+    pays = loan_pay_df()
+    today = date.today()
+    items = [
+        (l, loan_summary(l, pays[pays["loan_id"] == l["id"]], today))
+        for l in loans.to_dict("records")
+    ]
+    st.subheader("🏦 Loan aur Kist")
+    pending = sum(i["pending"] for _, i in items)
+    pen_due = sum(i["pen_due"] for _, i in items)
+    n_late = sum(len(i["overdue"]) for _, i in items)
+    k1, k2, k3 = st.columns(3)
+    k1.markdown(kpi("🏦 Baaki kist rakam", inr(pending), f"{len(items)} loan", "b"), unsafe_allow_html=True)
+    k2.markdown(
+        kpi("⚠️ Penalty baaki", inr(pen_due), "late kist ki penalty", "r" if pen_due > 0.005 else "g"),
+        unsafe_allow_html=True,
+    )
+    k3.markdown(
+        kpi("⏰ Late kist", str(n_late), "time par nahi bhari", "r" if n_late else "g"),
+        unsafe_allow_html=True,
+    )
+    st.write("")
+    for start in range(0, len(items), 3):
+        cols = st.columns(3)
+        for col, (l, i) in zip(cols, items[start:start + 3]):
+            with col, st.container(border=True):
+                if i["overdue"]:
+                    cls, label = "r", f"{len(i['overdue'])} kist late"
+                elif i["pending"] <= 0.005 and i["pen_due"] > 0.005:
+                    cls, label = "r", "Penalty baaki"
+                elif i["pending"] <= 0.005:
+                    cls, label = "g", "Loan poora"
+                else:
+                    cls, label = "g", "Time par"
+                nxt = i["next"]
+                nxt_txt = f"Agli kist: {nxt['due'].strftime('%d %b %Y')}" if nxt else "Saari kist ho gayi"
+                st.markdown(
+                    f'<div class="pcard-top">{avatar(l["name"])}<div>'
+                    f'<div class="pname">{escape(l["name"])}</div>'
+                    f'<div class="pmeta">{inr(l["kist_amount"])} × {int(l["total_kists"])} kist · {nxt_txt}</div>'
+                    f'</div></div>'
+                    f'<div class="pamt">{inr(i["pending"])}</div>'
+                    f'<span class="chip {cls}">{label}</span>'
+                    f'<div class="pmeta" style="margin-top:6px">{i["paid_cnt"]}/{int(l["total_kists"])} kist bhari</div>',
+                    unsafe_allow_html=True,
+                )
+                if i["pen_due"] > 0.005:
+                    st.markdown(
+                        f'<div class="neg" style="font-weight:700;font-size:.85rem">'
+                        f'⚠️ Penalty baaki: {inr(i["pen_due"])}</div>',
+                        unsafe_allow_html=True,
+                    )
+                st.progress(min(i["paid"] / i["total"], 1.0) if i["total"] else 0.0)
+                with st.expander("Kist ki list"):
+                    tbl = pd.DataFrame([
+                        {
+                            "Kist": r["no"],
+                            "Due date": r["due"].isoformat(),
+                            "Bhari": r["paid_on"].isoformat() if r["paid_on"] else "—",
+                            "Der (din)": r["late"],
+                            "Penalty": r["penalty"],
+                        }
+                        for r in i["rows"]
+                    ])
+                    st.dataframe(
+                        tbl, hide_index=True, use_container_width=True,
+                        column_config={"Penalty": st.column_config.NumberColumn(format="₹%.2f")},
+                    )
+
+
 def page_dashboard():
     hero("📒 Udhari Khata", f"Aaj {date.today().strftime('%d %b %Y')} · aapka poora hisab ek nazar me")
     df = txns_df()
     inc = income_df()
-    if df.empty and inc.empty:
+    if df.empty and inc.empty and loans_df().empty:
         st.info("Abhi koi entry nahi hai. Shuru karne ke liye 'Nayi Entry' par jaiye.")
         st.button("➕ Pehli entry daalein", on_click=go, args=(P_NEW,), type="primary")
         return
@@ -318,6 +481,8 @@ def page_dashboard():
         unsafe_allow_html=True,
     )
     st.write("")
+
+    loan_section()
 
     left, right = st.columns([1.35, 1])
     with left:
@@ -426,14 +591,100 @@ def income_form():
             st.toast("Income save ho gayi", icon="✅")
 
 
+def loan_entry_form():
+    mode = st.radio(
+        "Kya karna hai?", ["➕ Naya loan jodein", "💸 Kist / penalty bhari"],
+        horizontal=True, key="loan_mode",
+    )
+    if mode.startswith("➕"):
+        # form ke bahar, taaki penalty ka label turant badle
+        ptype = st.radio(
+            "Late kist par penalty kaise lagti hai?", list(LOAN_PEN_TYPES.values()),
+            horizontal=True, key="loan_pen_type",
+        )
+        daily = ptype == LOAN_PEN_TYPES["daily"]
+        with st.form("loan_new", clear_on_submit=True):
+            name = st.text_input("Loan ka naam", placeholder="jaise: Bank loan / Ramesh se liya")
+            a, b, c = st.columns(3)
+            loan_amount = a.number_input("Loan ki rakam (₹, optional)", min_value=0.0, step=1000.0, format="%.2f")
+            kist = b.number_input("Ek kist (₹)", min_value=0.0, step=100.0, format="%.2f")
+            n = c.number_input("Kul kitni kist", min_value=1, value=12, step=1)
+            d, e = st.columns(2)
+            pen = d.number_input(
+                "Penalty (₹ per din)" if daily else "Penalty (₹ har late kist par)",
+                min_value=0.0, step=10.0, format="%.2f",
+            )
+            first = e.date_input("Pehli kist ki due date", value=date.today())
+            note = st.text_input("Note (optional)", placeholder="jaise: bike loan / mahine ki 5 tarikh")
+            ok = st.form_submit_button("💾 Loan save karein", type="primary", use_container_width=True)
+        if ok:
+            name = name.strip()
+            if not name:
+                st.error("Loan ka naam likhiye.")
+            elif kist <= 0:
+                st.error("Ek kist ki rakam 0 se zyada honi chahiye.")
+            elif not query_df("SELECT 1 FROM loans WHERE name = ? COLLATE NOCASE", (name,)).empty:
+                st.error("Is naam ka loan pehle se hai, doosra naam chuniye.")
+            else:
+                run(
+                    "INSERT INTO loans(name, loan_amount, kist_amount, total_kists, first_due, "
+                    "penalty_type, penalty_amount, note) VALUES (?,?,?,?,?,?,?,?)",
+                    (name, float(loan_amount), float(kist), int(n), first.isoformat(),
+                     "daily" if daily else "fixed", float(pen), note.strip()),
+                )
+                st.success(f"✅ '{name}' loan save ho gaya: {int(n)} kist × {inr(kist)}.")
+                st.toast("Loan save ho gaya", icon="✅")
+        return
+
+    loans = loans_df()
+    if loans.empty:
+        st.info("Pehle 'Naya loan jodein' se loan banaiye.")
+        return
+    pick = st.selectbox("Kaun sa loan?", loans["name"].tolist(), key="loan_pick")
+    l = loans[loans["name"] == pick].iloc[0].to_dict()
+    pays = loan_pay_df()
+    inf = loan_summary(l, pays[pays["loan_id"] == l["id"]], date.today())
+    nxt = inf["next"]
+    st.caption(
+        f"Baaki kist rakam: {inr(inf['pending'])} · Penalty baaki: {inr(inf['pen_due'])}"
+        + (f" · Agli kist: {nxt['due'].strftime('%d %b %Y')}" if nxt else " · Saari kist ho gayi")
+    )
+    if inf["overdue"]:
+        st.warning(f"{len(inf['overdue'])} kist late hai. Ab tak ki penalty: {inr(inf['pen_total'])}")
+
+    with st.form("loan_pay", clear_on_submit=True):
+        kind = st.radio("Kya bhara?", ["Kist", "Penalty"], horizontal=True)
+        a, b = st.columns(2)
+        amount = a.number_input(
+            "Rakam (₹)", min_value=0.0, value=float(l["kist_amount"]), step=100.0,
+            format="%.2f", key=f"lp_amt_{l['id']}",
+        )
+        pdate = b.date_input("Kis tarikh ko bhari", value=date.today())
+        note = st.text_input("Note (optional)", placeholder="jaise: online / cash")
+        ok = st.form_submit_button("💾 Save karein", type="primary", use_container_width=True)
+    if ok:
+        if amount <= 0:
+            st.error("Rakam 0 se zyada honi chahiye.")
+        else:
+            run(
+                "INSERT INTO loan_payments(loan_id, pdate, kind, amount, note) VALUES (?,?,?,?,?)",
+                (int(l["id"]), pdate.isoformat(), kind.lower(), float(amount), note.strip()),
+            )
+            st.success(f"✅ {pick}: {kind.lower()} {inr(amount)} save ho gayi.")
+            st.toast("Save ho gaya", icon="✅")
+
+
 def page_new_entry():
-    hero("➕ Nayi Entry", "Len-den ya income ka hisab kuch hi second me likhiye")
+    hero("➕ Nayi Entry", "Len-den, income ya loan ki kist kuch hi second me likhiye")
     typ = st.radio(
-        "Entry ka type", ["📒 Udhari / Len-den", "💰 Income (kamai)"],
+        "Entry ka type", ["📒 Udhari / Len-den", "💰 Income (kamai)", "🏦 Loan / Kist"],
         horizontal=True, key="entry_type",
     )
     if typ.startswith("💰"):
         income_form()
+        return
+    if typ.startswith("🏦"):
+        loan_entry_form()
         return
     parties = parties_df()
     pre = st.session_state.pop("prefill_party", None)
@@ -471,6 +722,12 @@ def page_new_entry():
             st.toast("Entry save ho gayi", icon="✅")
 
 
+SHEETS = ["Udhari", "Income", "Loan", "Kist_Penalty"]
+LOAN_COLS = ["name", "loan_amount", "kist_amount", "total_kists", "first_due",
+             "penalty_type", "penalty_amount", "note"]
+PAY_COLS = ["loan", "date", "kind", "amount", "note"]
+
+
 def to_xlsx_multi(sheets):
     """{sheet_naam: DataFrame} ko ek Excel (.xlsx) file me badalta hai."""
     buf = BytesIO()
@@ -486,87 +743,112 @@ def to_xlsx_multi(sheets):
 
 def _clean(d):
     d = d.fillna("")
-    if "date" in d.columns:
-        d["date"] = d["date"].astype(str).str[:10]
+    for c in ("date", "first_due"):
+        if c in d.columns:
+            d[c] = d[c].astype(str).str[:10]
     return d
 
 
 def read_backup_all(f):
-    """Ek Excel file se 'Udhari' aur 'Income' sheets padhta hai (purani CSV ho to sirf Udhari)."""
+    """Ek Excel file se saari sheets padhta hai (purani CSV ho to sirf Udhari)."""
     if f.name.lower().endswith(".csv"):
-        return {"Udhari": _clean(pd.read_csv(f)), "Income": None}
-    sheets = pd.read_excel(f, sheet_name=None, dtype={"date": str})
-    return {
-        "Udhari": _clean(sheets["Udhari"]) if "Udhari" in sheets else None,
-        "Income": _clean(sheets["Income"]) if "Income" in sheets else None,
-    }
+        out = {k: None for k in SHEETS}
+        out["Udhari"] = _clean(pd.read_csv(f))
+        return out
+    sheets = pd.read_excel(f, sheet_name=None, dtype={"date": str, "first_due": str})
+    return {k: _clean(sheets[k]) if k in sheets else None for k in SHEETS}
 
 
 def template_xlsx():
     """Restore ke liye khali Excel format (headers + dropdown + kaise bhare ki guide)."""
     from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.styles import Font, PatternFill
     from openpyxl.worksheet.datavalidation import DataValidation
 
     wb = Workbook()
     head_fill = PatternFill("solid", fgColor="4F46E5")
     head_font = Font(bold=True, color="FFFFFF")
 
-    def make(ws, cols, widths):
+    def make(ws, cols, widths, date_cols=("date",)):
         ws.append(cols)
         for i, w in enumerate(widths, start=1):
             c = ws.cell(row=1, column=i)
             c.fill, c.font = head_fill, head_font
             ws.column_dimensions[c.column_letter].width = w
         ws.freeze_panes = "A2"
-        for r in range(2, 1002):  # tarikh ko text rakho, taaki Excel format na badle
-            ws.cell(row=r, column=cols.index("date") + 1).number_format = "@"
+        for dc in date_cols:  # tarikh ko text rakho, taaki Excel format na badle
+            if dc in cols:
+                for r in range(2, 1002):
+                    ws.cell(row=r, column=cols.index(dc) + 1).number_format = "@"
+
+    def dropdown(ws, options, rng, strict=True):
+        dv = DataValidation(type="list", formula1='"' + ",".join(options) + '"',
+                            allow_blank=True, showErrorMessage=strict)
+        dv.error, dv.errorTitle = "Dropdown se chuniye", "Galat value"
+        ws.add_data_validation(dv)
+        dv.add(rng)
 
     ws1 = wb.active
     ws1.title = "Udhari"
     make(ws1, ["party", "date", "kind", "amount", "note"], [24, 14, 28, 14, 36])
-    dv = DataValidation(type="list", formula1='"' + ",".join(KINDS) + '"', allow_blank=True)
-    dv.error, dv.errorTitle = "Dropdown se chuniye", "Galat kism"
-    ws1.add_data_validation(dv)
-    dv.add("C2:C1000")
+    dropdown(ws1, list(KINDS), "C2:C1000")
 
     ws2 = wb.create_sheet("Income")
     make(ws2, ["date", "amount", "source", "note"], [14, 14, 24, 36])
-    dv2 = DataValidation(type="list", formula1='"' + ",".join(INCOME_SOURCES[:-1]) + '"',
-                         allow_blank=True, showErrorMessage=False)
-    ws2.add_data_validation(dv2)
-    dv2.add("C2:C1000")
+    dropdown(ws2, INCOME_SOURCES[:-1], "C2:C1000", strict=False)
 
-    ws3 = wb.create_sheet("Kaise bhare")
+    ws3 = wb.create_sheet("Loan")
+    make(ws3, LOAN_COLS, [24, 16, 14, 14, 14, 14, 16, 30], date_cols=("first_due",))
+    dropdown(ws3, list(LOAN_PEN_TYPES), "F2:F1000")
+
+    ws4 = wb.create_sheet("Kist_Penalty")
+    make(ws4, PAY_COLS, [24, 14, 12, 14, 30])
+    dropdown(ws4, ["kist", "penalty"], "C2:C1000")
+
+    ws5 = wb.create_sheet("Kaise bhare")
     lines = [
         ("Restore ke liye Excel kaise bhare", True),
         ("", False),
-        ("1. 'Udhari' sheet me udhari ki entries, 'Income' sheet me income ki entries bhariye.", False),
-        ("2. Pehli row (heading) ko mat badliye, uske neeche se data likhna shuru kijiye.", False),
-        ("3. Dono sheet zaroori nahi - sirf jis sheet me data hai wahi judega.", False),
-        ("4. Is 'Kaise bhare' sheet ko rakhein ya hata dein, koi farak nahi padta.", False),
+        ("1. Har sheet me heading wali pehli row mat badliye, uske neeche se data likhiye.", False),
+        ("2. Saari sheet zaroori nahi - sirf jis sheet me data hai wahi judega.", False),
+        ("3. Is 'Kaise bhare' sheet ko rakhein ya hata dein, koi farak nahi padta.", False),
+        ("4. Tarikh hamesha YYYY-MM-DD me likhiye, jaise 2026-10-27.", False),
         ("", False),
-        ("Udhari sheet ke columns", True),
+        ("Udhari sheet", True),
         ("party  -> samne wale ka naam (nayi party ho to apne aap ban jayegi)", False),
-        ("date   -> tarikh YYYY-MM-DD me, jaise 2026-10-27", False),
+        ("date   -> tarikh", False),
         ("kind   -> dropdown se chuniye (neeche ke 4 me se ek):", False),
     ] + [("          - " + k, False) for k in KINDS] + [
         ("amount -> rakam, 0 se zyada, jaise 1500 ya 250.50", False),
-        ("note   -> optional, khali chhod sakte hain", False),
-        ("", False),
-        ("Income sheet ke columns", True),
-        ("date   -> tarikh YYYY-MM-DD me", False),
-        ("amount -> rakam, 0 se zyada", False),
-        ("source -> kahan se (jaise Salary, Bonus, Kiraya ya apna likha hua naam)", False),
         ("note   -> optional", False),
         ("", False),
-        ("Duplicate entries (same party, date, kism, rakam, note) dobara nahi judti.", False),
+        ("Income sheet", True),
+        ("date, amount, note -> upar jaisa", False),
+        ("source -> kahan se (jaise Salary, Bonus, Kiraya ya apna likha hua naam)", False),
+        ("", False),
+        ("Loan sheet (ek loan = ek row)", True),
+        ("name           -> loan ka naam (har loan ka alag naam)", False),
+        ("loan_amount    -> loan ki rakam (optional, khali ya 0 chalega)", False),
+        ("kist_amount    -> ek kist ki rakam, 0 se zyada", False),
+        ("total_kists    -> kul kitni kist", False),
+        ("first_due      -> pehli kist ki due date (baaki har mahine usi tarikh ko)", False),
+        ("penalty_type   -> fixed = har late kist par ek baar, daily = har din ki der par", False),
+        ("penalty_amount -> penalty ki rakam (fixed ho to ek baar ki, daily ho to ek din ki)", False),
+        ("note           -> optional", False),
+        ("", False),
+        ("Kist_Penalty sheet (loan me bhari gayi kist ya penalty)", True),
+        ("loan   -> wahi naam jo Loan sheet me hai (pehle se app me ho to bhi chalega)", False),
+        ("date   -> kis tarikh ko bhari", False),
+        ("kind   -> kist ya penalty", False),
+        ("amount -> rakam", False),
+        ("note   -> optional", False),
+        ("", False),
+        ("Duplicate entries (bilkul same data) dobara nahi judti.", False),
     ]
     for text, bold in lines:
-        ws3.append([text])
-        ws3.cell(row=ws3.max_row, column=1).font = Font(bold=bold, size=12 if bold else 11)
-        ws3.cell(row=ws3.max_row, column=1).alignment = Alignment(wrap_text=False)
-    ws3.column_dimensions["A"].width = 95
+        ws5.append([text])
+        ws5.cell(row=ws5.max_row, column=1).font = Font(bold=bold, size=12 if bold else 11)
+    ws5.column_dimensions["A"].width = 95
 
     buf = BytesIO()
     wb.save(buf)
@@ -583,16 +865,26 @@ def page_backup():
     export = df[["party", "date", "kind", "amount", "note"]]
     inc = income_df()
     inc_export = inc[["date", "amount", "source", "note"]]
+    loans = loans_df()
+    loan_export = loans[LOAN_COLS]
+    pays = loan_pay_df()
+    pay_export = pays[PAY_COLS[:1] + PAY_COLS[1:]]
     phones = parties_df()
-    empty = export.empty and inc_export.empty
+    empty = export.empty and inc_export.empty and loan_export.empty
 
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("#### ⬇️ Backup lein")
-        st.caption(f"{len(export)} udhari entries, {len(phones)} parties, {len(inc_export)} income entries")
+        st.caption(
+            f"{len(export)} udhari entries, {len(phones)} parties, "
+            f"{len(inc_export)} income entries, {len(loan_export)} loan"
+        )
         st.download_button(
             "Excel backup download karein",
-            to_xlsx_multi({"Udhari": export, "Income": inc_export}),
+            to_xlsx_multi({
+                "Udhari": export, "Income": inc_export,
+                "Loan": loan_export, "Kist_Penalty": pay_export,
+            }),
             file_name=f"udhari_backup_{date.today().isoformat()}.xlsx",
             mime=XLSX_MIME, disabled=empty, type="primary",
         )
@@ -608,9 +900,9 @@ def page_backup():
         up = st.file_uploader("Backup Excel chuniye", type=["xlsx", "csv"], label_visibility="collapsed")
         if up is not None and st.button("Restore karein"):
             sheets = read_backup_all(up)
-            ud, ic = sheets["Udhari"], sheets["Income"]
-            if ud is None and ic is None:
-                st.error("File me 'Udhari' ya 'Income' sheet honi chahiye.")
+            ud, ic, lo, kp = (sheets[k] for k in SHEETS)
+            if all(x is None for x in (ud, ic, lo, kp)):
+                st.error("File me 'Udhari', 'Income', 'Loan' ya 'Kist_Penalty' sheet honi chahiye.")
                 return
 
             msgs = []
@@ -658,6 +950,74 @@ def page_backup():
                     have.add(key)
                     added += 1
                 msgs.append(f"Income: {added} entries jodi gayi, {skipped} pehle se maujood thi.")
+
+            if lo is not None:
+                if not set(LOAN_COLS).issubset(lo.columns):
+                    st.error("Loan sheet me ye columns hone chahiye: " + ", ".join(LOAN_COLS))
+                    return
+                names = {str(n).lower() for n in loans["name"]}
+                added = skipped = bad = 0
+                for _, r in lo.iterrows():
+                    nm = str(r["name"]).strip()
+                    if not nm or nm.lower() in names:
+                        skipped += 1
+                        continue
+                    try:
+                        kist, n = float(r["kist_amount"]), int(float(r["total_kists"]))
+                        date.fromisoformat(str(r["first_due"])[:10])
+                        if kist <= 0 or n < 1:
+                            raise ValueError
+                        ptype = str(r["penalty_type"]).strip().lower()
+                        ptype = ptype if ptype in LOAN_PEN_TYPES else "fixed"
+                        run(
+                            "INSERT INTO loans(name, loan_amount, kist_amount, total_kists, first_due, "
+                            "penalty_type, penalty_amount, note) VALUES (?,?,?,?,?,?,?,?)",
+                            (nm, float(r["loan_amount"] or 0), kist, n, str(r["first_due"])[:10],
+                             ptype, float(r["penalty_amount"] or 0), str(r["note"])),
+                        )
+                    except (ValueError, TypeError):
+                        bad += 1
+                        continue
+                    names.add(nm.lower())
+                    added += 1
+                msgs.append(
+                    f"Loan: {added} jode gaye, {skipped} pehle se maujood, {bad} galat row chhodi."
+                )
+
+            if kp is not None:
+                if not set(PAY_COLS).issubset(kp.columns):
+                    st.error("Kist_Penalty sheet me ye columns hone chahiye: " + ", ".join(PAY_COLS))
+                    return
+                ids = {str(r["name"]).lower(): int(r["id"]) for r in loans_df().to_dict("records")}
+                have = {
+                    (str(r.loan).lower(), str(r.date), r.kind, round(float(r.amount), 2), str(r.note))
+                    for r in loan_pay_df().itertuples()
+                }
+                added = skipped = bad = 0
+                for _, r in kp.iterrows():
+                    try:
+                        nm = str(r["loan"]).strip().lower()
+                        kind = str(r["kind"]).strip().lower()
+                        amt = float(r["amount"])
+                        date.fromisoformat(str(r["date"])[:10])
+                        if nm not in ids or kind not in ("kist", "penalty") or amt <= 0:
+                            raise ValueError
+                    except (ValueError, TypeError):
+                        bad += 1
+                        continue
+                    key = (nm, str(r["date"])[:10], kind, round(amt, 2), str(r["note"]))
+                    if key in have:
+                        skipped += 1
+                        continue
+                    run(
+                        "INSERT INTO loan_payments(loan_id, pdate, kind, amount, note) VALUES (?,?,?,?,?)",
+                        (ids[nm], key[1], kind, amt, key[4]),
+                    )
+                    have.add(key)
+                    added += 1
+                msgs.append(
+                    f"Kist/Penalty: {added} jodi gayi, {skipped} pehle se maujood, {bad} galat row chhodi."
+                )
 
             st.success("  \n".join(msgs))
 
