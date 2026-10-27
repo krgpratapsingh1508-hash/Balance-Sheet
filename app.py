@@ -153,30 +153,6 @@ def hero(title, subtitle):
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-def to_xlsx(df, sheet="Backup"):
-    """DataFrame ko Excel (.xlsx) bytes me badalta hai."""
-    buf = BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        df.to_excel(w, index=False, sheet_name=sheet)
-        ws = w.sheets[sheet]
-        for i, col in enumerate(df.columns, start=1):
-            width = max([len(str(col))] + [len(str(v)) for v in df[col].head(200)]) + 2
-            ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = min(width, 45)
-    return buf.getvalue()
-
-
-def read_backup(f):
-    """Upload ki gayi Excel (.xlsx) ya purani CSV file padhta hai."""
-    if f.name.lower().endswith(".csv"):
-        d = pd.read_csv(f)
-    else:
-        d = pd.read_excel(f, dtype={"date": str})
-    d = d.fillna("")
-    if "date" in d.columns:
-        d["date"] = d["date"].astype(str).str[:10]
-    return d
-
-
 # ---------------------------------------------------------------- database
 def run(sql, params=()):
     with closing(sqlite3.connect(DB_PATH)) as c:
@@ -495,88 +471,117 @@ def page_new_entry():
             st.toast("Entry save ho gayi", icon="✅")
 
 
+def to_xlsx_multi(sheets):
+    """{sheet_naam: DataFrame} ko ek Excel (.xlsx) file me badalta hai."""
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        for name, df in sheets.items():
+            df.to_excel(w, index=False, sheet_name=name)
+            ws = w.sheets[name]
+            for i, col in enumerate(df.columns, start=1):
+                width = max([len(str(col))] + [len(str(v)) for v in df[col].head(200)]) + 2
+                ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = min(width, 45)
+    return buf.getvalue()
+
+
+def _clean(d):
+    d = d.fillna("")
+    if "date" in d.columns:
+        d["date"] = d["date"].astype(str).str[:10]
+    return d
+
+
+def read_backup_all(f):
+    """Ek Excel file se 'Udhari' aur 'Income' sheets padhta hai (purani CSV ho to sirf Udhari)."""
+    if f.name.lower().endswith(".csv"):
+        return {"Udhari": _clean(pd.read_csv(f)), "Income": None}
+    sheets = pd.read_excel(f, sheet_name=None, dtype={"date": str})
+    return {
+        "Udhari": _clean(sheets["Udhari"]) if "Udhari" in sheets else None,
+        "Income": _clean(sheets["Income"]) if "Income" in sheets else None,
+    }
+
+
 def page_backup():
     hero("💾 Backup / Restore", "Apna data surakshit rakhiye")
     st.warning(
         "Streamlit Cloud par app restart hone par database file mit sakti hai. "
-        "Isliye time-time par CSV backup download kar lijiye."
+        "Isliye time-time par Excel backup download kar lijiye."
     )
     df = txns_df()
     export = df[["party", "date", "kind", "amount", "note"]]
+    inc = income_df()
+    inc_export = inc[["date", "amount", "source", "note"]]
     phones = parties_df()
+    empty = export.empty and inc_export.empty
+
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("#### ⬇️ Backup lein")
-        st.caption(f"{len(export)} entries, {len(phones)} parties")
+        st.caption(f"{len(export)} udhari entries, {len(phones)} parties, {len(inc_export)} income entries")
         st.download_button(
             "Excel backup download karein",
-            to_xlsx(export, "Udhari"),
+            to_xlsx_multi({"Udhari": export, "Income": inc_export}),
             file_name=f"udhari_backup_{date.today().isoformat()}.xlsx",
-            mime=XLSX_MIME, disabled=export.empty, type="primary",
+            mime=XLSX_MIME, disabled=empty, type="primary",
         )
     with c2:
         st.markdown("#### ⬆️ Restore karein")
         up = st.file_uploader("Backup Excel chuniye", type=["xlsx", "csv"], label_visibility="collapsed")
         if up is not None and st.button("Restore karein"):
-            data = read_backup(up)
-            need = {"party", "date", "kind", "amount", "note"}
-            if not need.issubset(data.columns):
-                st.error("File me ye columns hone chahiye: party, date, kind, amount, note")
+            sheets = read_backup_all(up)
+            ud, ic = sheets["Udhari"], sheets["Income"]
+            if ud is None and ic is None:
+                st.error("File me 'Udhari' ya 'Income' sheet honi chahiye.")
                 return
-            bad = set(data["kind"]) - set(KINDS)
-            if bad:
-                st.error(f"Anjaan 'kind' values: {', '.join(map(str, bad))}")
-                return
-            seen = {
-                (r.party, str(r.date), r.kind, round(float(r.amount), 2), str(r.note or ""))
-                for r in export.itertuples()
-            }
-            added = skipped = 0
-            for _, r in data.iterrows():
-                key = (str(r["party"]).strip(), str(r["date"]), r["kind"], round(float(r["amount"]), 2), str(r["note"]))
-                if key in seen:
-                    skipped += 1
-                    continue
-                pid = get_or_create_party(str(r["party"]))
-                run(
-                    "INSERT INTO txns(party_id, tdate, kind, amount, note) VALUES (?,?,?,?,?)",
-                    (pid, str(r["date"]), r["kind"], float(r["amount"]), str(r["note"])),
-                )
-                seen.add(key)
-                added += 1
-            st.success(f"{added} entries jodi gayi, {skipped} pehle se maujood thi (duplicate nahi banayi).")
 
-    st.divider()
-    inc = income_df()
-    i1, i2 = st.columns(2)
-    with i1:
-        st.markdown("#### 💵 Income backup")
-        st.caption(f"{len(inc)} income entries")
-        st.download_button(
-            "Income Excel backup",
-            to_xlsx(inc[["date", "amount", "source", "note"]], "Income"),
-            file_name=f"income_backup_{date.today().isoformat()}.xlsx",
-            mime=XLSX_MIME, disabled=inc.empty,
-        )
-    with i2:
-        st.markdown("#### 💵 Income restore")
-        iup = st.file_uploader("Income Excel chuniye", type=["xlsx", "csv"], key="inc_up", label_visibility="collapsed")
-        if iup is not None and st.button("Income restore karein"):
-            d = read_backup(iup)
-            if not {"date", "amount", "source", "note"}.issubset(d.columns):
-                st.error("File me ye columns hone chahiye: date, amount, source, note")
-            else:
+            msgs = []
+            if ud is not None:
+                need = {"party", "date", "kind", "amount", "note"}
+                if not need.issubset(ud.columns):
+                    st.error("Udhari sheet me ye columns hone chahiye: party, date, kind, amount, note")
+                    return
+                bad = set(ud["kind"]) - set(KINDS)
+                if bad:
+                    st.error(f"Anjaan 'kind' values: {', '.join(map(str, bad))}")
+                    return
+                seen = {
+                    (r.party, str(r.date), r.kind, round(float(r.amount), 2), str(r.note or ""))
+                    for r in export.itertuples()
+                }
+                added = skipped = 0
+                for _, r in ud.iterrows():
+                    key = (str(r["party"]).strip(), str(r["date"]), r["kind"], round(float(r["amount"]), 2), str(r["note"]))
+                    if key in seen:
+                        skipped += 1
+                        continue
+                    pid = get_or_create_party(str(r["party"]))
+                    run(
+                        "INSERT INTO txns(party_id, tdate, kind, amount, note) VALUES (?,?,?,?,?)",
+                        (pid, str(r["date"]), r["kind"], float(r["amount"]), str(r["note"])),
+                    )
+                    seen.add(key)
+                    added += 1
+                msgs.append(f"Udhari: {added} entries jodi gayi, {skipped} pehle se maujood thi.")
+
+            if ic is not None:
+                if not {"date", "amount", "source", "note"}.issubset(ic.columns):
+                    st.error("Income sheet me ye columns hone chahiye: date, amount, source, note")
+                    return
                 have = {(str(r.date), round(float(r.amount), 2), str(r.source), str(r.note)) for r in inc.itertuples()}
-                added = 0
-                for _, r in d.iterrows():
+                added = skipped = 0
+                for _, r in ic.iterrows():
                     key = (str(r["date"]), round(float(r["amount"]), 2), str(r["source"]), str(r["note"]))
                     if key in have:
+                        skipped += 1
                         continue
                     run("INSERT INTO income(idate, amount, source, note) VALUES (?,?,?,?)",
                         (key[0], float(r["amount"]), key[2], key[3]))
                     have.add(key)
                     added += 1
-                st.success(f"{added} income entries jodi gayi.")
+                msgs.append(f"Income: {added} entries jodi gayi, {skipped} pehle se maujood thi.")
+
+            st.success("  \n".join(msgs))
 
 
 # ---------------------------------------------------------------- main
