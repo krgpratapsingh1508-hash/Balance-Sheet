@@ -303,11 +303,20 @@ def loan_summary(loan, pays, today):
     paid = float(pays.loc[pays["kind"] == "kist", "amount"].sum())
     pen_paid = float(pays.loc[pays["kind"] == "penalty", "amount"].sum())
     pen_total = sum(r["penalty"] for r in rows)
+    total = kist * n
+    pending = max(total - paid, 0.0)
+    principal = float(loan["loan_amount"] or 0)
+    interest = max(total - principal, 0.0) if principal > 0 else None
+    share = pending / total if total else 0.0  # baaki kist ka hissa (mool aur bayaj barabar hisab se)
     return {
         "rows": rows,
         "paid": paid,
-        "total": kist * n,
-        "pending": max(kist * n - paid, 0.0),
+        "total": total,
+        "pending": pending,
+        "principal": principal,
+        "interest": interest,
+        "pend_principal": principal * share if principal > 0 else None,
+        "pend_interest": interest * share if interest is not None else None,
         "paid_cnt": min(int((paid + 0.005) // kist), n),
         "pen_total": pen_total,
         "pen_paid": pen_paid,
@@ -482,16 +491,28 @@ def loan_section():
     pending = sum(i["pending"] for _, i in items)
     pen_due = sum(i["pen_due"] for _, i in items)
     n_late = sum(len(i["overdue"]) for _, i in items)
-    k1, k2, k3 = st.columns(3)
-    k1.markdown(kpi("🏦 Baaki kist rakam", inr(pending), f"{len(items)} loan", "b"), unsafe_allow_html=True)
+    known = [i for _, i in items if i["pend_interest"] is not None]
+    pend_interest = sum(i["pend_interest"] for i in known)
+    pend_principal = sum(i["pend_principal"] for i in known)
+    k1, k2, k3, k4 = st.columns(4)
+    k1.markdown(
+        kpi("🏦 Loan baaki (bayaj ke sath)", inr(pending), f"{len(items)} loan", "b"),
+        unsafe_allow_html=True,
+    )
     k2.markdown(
-        kpi("⚠️ Penalty baaki", inr(pen_due), "late kist ki penalty", "r" if pen_due > 0.005 else "g"),
+        kpi("💹 Isme bayaj", inr(pend_interest), f"mool {inr(pend_principal)} + bayaj",
+            "r" if pend_interest > 0.005 else "g"),
         unsafe_allow_html=True,
     )
     k3.markdown(
+        kpi("⚠️ Penalty baaki", inr(pen_due), "late kist ki penalty", "r" if pen_due > 0.005 else "g"),
+        unsafe_allow_html=True,
+    )
+    k4.markdown(
         kpi("⏰ Late kist", str(n_late), "time par nahi bhari", "r" if n_late else "g"),
         unsafe_allow_html=True,
     )
+    st.caption(f"Penalty ke sath kul dena: {inr(pending + pen_due)}")
     st.write("")
     for start in range(0, len(items), 3):
         cols = st.columns(3)
@@ -512,7 +533,8 @@ def loan_section():
                     f'<div class="pname">{escape(l["name"])}</div>'
                     f'<div class="pmeta">{inr(l["kist_amount"])} × {int(l["total_kists"])} kist · {nxt_txt}</div>'
                     f'</div></div>'
-                    f'<div class="pamt">{inr(i["pending"])}</div>'
+                    f'<div class="pmeta" style="margin-top:8px">Baaki (bayaj ke sath)</div>'
+                    f'<div class="pamt" style="margin-top:0">{inr(i["pending"])}</div>'
                     f'<span class="chip {cls}">{label}</span>'
                     f'<div class="pmeta" style="margin-top:6px">{i["paid_cnt"]}/{int(l["total_kists"])} kist bhari</div>',
                     unsafe_allow_html=True,
@@ -523,6 +545,17 @@ def loan_section():
                         f'⚠️ Penalty baaki: {inr(i["pen_due"])}</div>',
                         unsafe_allow_html=True,
                     )
+                if i["interest"] is not None:
+                    st.caption(
+                        f"Loan {inr(i['principal'])} + bayaj {inr(i['interest'])} = kul {inr(i['total'])}"
+                    )
+                    st.caption(
+                        f"Baaki me: mool {inr(i['pend_principal'])} + bayaj {inr(i['pend_interest'])}"
+                    )
+                else:
+                    st.caption(f"Kul wapas karna: {inr(i['total'])} (bayaj ke liye loan ki rakam chahiye)")
+                if i["pen_due"] > 0.005:
+                    st.caption(f"Penalty ke sath kul dena: {inr(i['pending'] + i['pen_due'])}")
                 st.progress(min(i["paid"] / i["total"], 1.0) if i["total"] else 0.0)
                 with st.expander("Kist ki list"):
                     tbl = pd.DataFrame([
@@ -695,7 +728,7 @@ def loan_entry_form():
         with st.form("loan_new", clear_on_submit=True):
             name = st.text_input("Loan ka naam", placeholder="jaise: Bank loan / Ramesh se liya")
             a, b, c = st.columns(3)
-            loan_amount = a.number_input("Loan ki rakam (₹, optional)", min_value=0.0, step=1000.0, format="%.2f")
+            loan_amount = a.number_input("Loan ki rakam (₹)", min_value=0.0, step=1000.0, format="%.2f")
             kist = b.number_input("Ek kist (₹)", min_value=0.0, step=100.0, format="%.2f")
             n = c.number_input("Kul kitni kist", min_value=1, value=12, step=1)
             d, e = st.columns(2)
@@ -710,8 +743,12 @@ def loan_entry_form():
             name = name.strip()
             if not name:
                 st.error("Loan ka naam likhiye.")
+            elif loan_amount <= 0:
+                st.error("Loan ki rakam likhiye (bayaj nikalne ke liye zaroori hai).")
             elif kist <= 0:
                 st.error("Ek kist ki rakam 0 se zyada honi chahiye.")
+            elif kist * n < loan_amount:
+                st.error("Kul kist (kist × kitni kist) loan ki rakam se kam hai, rakam check kijiye.")
             elif not query_df("SELECT 1 FROM loans WHERE name = ? COLLATE NOCASE", (name,)).empty:
                 st.error("Is naam ka loan pehle se hai, doosra naam chuniye.")
             else:
@@ -721,7 +758,10 @@ def loan_entry_form():
                     (name, float(loan_amount), float(kist), int(n), first.isoformat(),
                      "daily" if daily else "fixed", float(pen), note.strip()),
                 )
-                st.success(f"✅ '{name}' loan save ho gaya: {int(n)} kist × {inr(kist)}.")
+                st.success(
+                    f"✅ '{name}' loan save ho gaya: {int(n)} kist × {inr(kist)} = {inr(kist * n)}. "
+                    f"Loan {inr(loan_amount)} par kul bayaj {inr(kist * n - loan_amount)}."
+                )
                 st.toast("Loan save ho gaya", icon="✅")
         return
 
@@ -919,7 +959,7 @@ def template_xlsx():
         ("", False),
         ("Loan sheet (ek loan = ek row)", True),
         ("name           -> loan ka naam (har loan ka alag naam)", False),
-        ("loan_amount    -> loan ki rakam (optional, khali ya 0 chalega)", False),
+        ("loan_amount    -> loan ki rakam (bayaj nikalne ke liye zaroori)", False),
         ("kist_amount    -> ek kist ki rakam, 0 se zyada", False),
         ("total_kists    -> kul kitni kist", False),
         ("first_due      -> pehli kist ki due date (baaki har mahine usi tarikh ko)", False),
