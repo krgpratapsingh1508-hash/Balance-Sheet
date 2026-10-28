@@ -751,18 +751,19 @@ section[data-testid="stSidebar"] div[role="radiogroup"] > label { width: 100%; }
 
 /* ===== Bada, saaf aur sundar design (poore app / admin panel me) ===== */
 .stApp { line-height: 1.6; }
-.stMarkdown p, .stMarkdown li { font-size: 1.05rem; line-height: 1.65; }
+.stMarkdown p, .stMarkdown li { font-size: 1rem; line-height: 1.65; color: #1c2a35; }
 
 /* chhota likha hua (caption): bada aur gehra */
 [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] *,
 [data-testid="stCaption"], [data-testid="stCaption"] * {
-    font-size: 1.05rem !important; line-height: 1.6 !important;
-    color: #33414d !important; font-weight: 500 !important;
+    font-size: 0.9rem !important; line-height: 1.55 !important;
+    color: #6b7885 !important; font-weight: 400 !important;
 }
 
 /* har input ka title */
 [data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] label {
-    font-size: 1.1rem !important; font-weight: 700 !important; color: #14202b !important;
+    font-size: 1.05rem !important; font-weight: 700 !important; color: #0f3d4c !important;
+    letter-spacing: .01em;
 }
 
 /* ---------- RADIO = bade, aasaani se dabne wale PILL BUTTON ---------- */
@@ -772,7 +773,7 @@ section[data-testid="stSidebar"] div[role="radiogroup"] > label { width: 100%; }
 [data-testid="stRadio"] label,
 [data-testid="stRadio"] label[data-baseweb="radio"] {
     position: relative; cursor: pointer; margin: 0 !important;
-    min-height: 3.5rem !important; padding: 0.6rem 1.4rem !important;
+    min-height: 3.2rem !important; padding: 0.5rem 1.3rem !important;
     border: 2px solid #b9c6cf !important; border-radius: 14px !important;
     background: #ffffff !important; box-shadow: 0 2px 4px rgba(15,61,76,.10);
     display: inline-flex !important; align-items: center; justify-content: center;
@@ -787,7 +788,7 @@ section[data-testid="stSidebar"] div[role="radiogroup"] > label { width: 100%; }
     height: 100% !important; opacity: 0 !important; cursor: pointer; margin: 0 !important; z-index: 2;
 }
 [data-testid="stRadio"] label p, [data-testid="stRadio"] label div {
-    font-size: 1.15rem !important; font-weight: 600 !important; color: #14202b; line-height: 1.4;
+    font-size: 1.02rem !important; font-weight: 500 !important; color: #33414d; line-height: 1.4;
 }
 [data-testid="stRadio"] label:hover {
     border-color: #0f3d4c !important; background: #eaf3f6 !important;
@@ -800,13 +801,13 @@ section[data-testid="stSidebar"] div[role="radiogroup"] > label { width: 100%; }
     border-color: #0f3d4c !important; box-shadow: 0 6px 16px rgba(15,61,76,.38);
 }
 [data-testid="stRadio"] label:has(input:checked) p,
-[data-testid="stRadio"] label:has(input:checked) div { color: #ffffff !important; }
+[data-testid="stRadio"] label:has(input:checked) div { color: #ffffff !important; font-weight: 700 !important; }
 [data-testid="stRadio"] label:has(input:checked)::before {
     content: "✓"; color: #fff; font-weight: 700; font-size: 1.1rem; margin-right: 8px;
 }
 @media (max-width: 640px) {
     [data-testid="stRadio"] label { flex: 1 1 auto; padding: 0.6rem 1rem !important; }
-    [data-testid="stRadio"] label p, [data-testid="stRadio"] label div { font-size: 1.08rem !important; }
+    [data-testid="stRadio"] label p, [data-testid="stRadio"] label div { font-size: 1rem !important; }
 }
 
 /* ---------- Buttons ---------- */
@@ -816,7 +817,7 @@ section[data-testid="stSidebar"] div[role="radiogroup"] > label { width: 100%; }
     font-weight: 700 !important; box-shadow: 0 2px 4px rgba(15,61,76,.10); transition: all .15s ease;
 }
 .stButton > button p, .stDownloadButton > button p, [data-testid="stFormSubmitButton"] > button p {
-    font-size: 1.15rem !important; font-weight: 700 !important;
+    font-size: 1.05rem !important; font-weight: 700 !important;
 }
 .stButton > button:hover, .stDownloadButton > button:hover {
     border-color: #0f3d4c; transform: translateY(-2px); box-shadow: 0 6px 14px rgba(15,61,76,.20);
@@ -830,14 +831,18 @@ section[data-testid="stSidebar"] div[role="radiogroup"] > label { width: 100%; }
 
 /* ---------- Sandesh box ---------- */
 [data-testid="stAlert"] { border-radius: 12px; padding: 0.4rem 0.6rem; }
-[data-testid="stAlert"] p { font-size: 1.08rem !important; line-height: 1.6; font-weight: 500; }
+[data-testid="stAlert"] p { font-size: 0.98rem !important; line-height: 1.6; font-weight: 500; }
 
 /* expander, tab, metric, heading */
-[data-testid="stExpander"] summary p { font-size: 1.1rem !important; font-weight: 700; }
+[data-testid="stExpander"] summary p { font-size: 1.05rem !important; font-weight: 700; color: #0f3d4c; }
 button[data-baseweb="tab"] p { font-size: 1.1rem !important; font-weight: 700; }
 [data-testid="stMetricLabel"] p { font-size: 1.02rem !important; font-weight: 600; color: #33414d; }
 [data-testid="stMetricValue"] { font-size: 1.7rem !important; }
-h4 { font-size: 1.25rem !important; margin-top: .4rem; }
+h1 { font-size: 2rem !important; }
+h2 { font-size: 1.6rem !important; }
+h3 { font-size: 1.4rem !important; color: #0f3d4c !important; }
+h4 { font-size: 1.3rem !important; margin-top: .6rem; color: #0f3d4c !important;
+     border-left: 5px solid #1d6075; padding-left: 10px; }
 
 /* card / kpi ke chhote text */
 .kpi .lbl { font-size: .95rem; } .kpi .sub { font-size: .9rem; }
