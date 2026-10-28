@@ -770,7 +770,7 @@ section[data-testid="stSidebar"] div[role="radiogroup"] > label { width: 100%; }
 [data-testid="stRadio"] [role="radiogroup"] {
     gap: 0.7rem !important; flex-wrap: wrap !important; padding: 4px 0;
 }
-[data-testid="stRadio"] label,
+[data-testid="stRadio"] label[data-baseweb="radio"],
 [data-testid="stRadio"] label[data-baseweb="radio"] {
     position: relative; cursor: pointer; margin: 0 !important;
     min-height: 3.2rem !important; padding: 0.5rem 1.3rem !important;
@@ -781,33 +781,33 @@ section[data-testid="stSidebar"] div[role="radiogroup"] > label { width: 100%; }
     user-select: none;
 }
 /* gol button chhupao */
-[data-testid="stRadio"] label > div:first-child { display: none !important; }
+[data-testid="stRadio"] label[data-baseweb="radio"] > div:first-of-type { display: none !important; }
 /* pure pill par kahin bhi dabao to chalega */
-[data-testid="stRadio"] label input {
+[data-testid="stRadio"] label[data-baseweb="radio"] input {
     position: absolute !important; inset: 0 !important; width: 100% !important;
     height: 100% !important; opacity: 0 !important; cursor: pointer; margin: 0 !important; z-index: 2;
 }
-[data-testid="stRadio"] label p, [data-testid="stRadio"] label div {
+[data-testid="stRadio"] label[data-baseweb="radio"] p, [data-testid="stRadio"] label[data-baseweb="radio"] div {
     font-size: 1.02rem !important; font-weight: 500 !important; color: #33414d; line-height: 1.4;
 }
-[data-testid="stRadio"] label:hover {
+[data-testid="stRadio"] label[data-baseweb="radio"]:hover {
     border-color: #0f3d4c !important; background: #eaf3f6 !important;
     transform: translateY(-2px); box-shadow: 0 6px 14px rgba(15,61,76,.20);
 }
-[data-testid="stRadio"] label:active { transform: scale(0.97); }
+[data-testid="stRadio"] label[data-baseweb="radio"]:active { transform: scale(0.97); }
 /* chuna hua pill */
-[data-testid="stRadio"] label:has(input:checked) {
+[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {
     background: linear-gradient(135deg, #0f3d4c, #1d6075) !important;
     border-color: #0f3d4c !important; box-shadow: 0 6px 16px rgba(15,61,76,.38);
 }
-[data-testid="stRadio"] label:has(input:checked) p,
-[data-testid="stRadio"] label:has(input:checked) div { color: #ffffff !important; font-weight: 700 !important; }
-[data-testid="stRadio"] label:has(input:checked)::before {
+[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) p,
+[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) div { color: #ffffff !important; font-weight: 700 !important; }
+[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked)::before {
     content: "✓"; color: #fff; font-weight: 700; font-size: 1.1rem; margin-right: 8px;
 }
 @media (max-width: 640px) {
-    [data-testid="stRadio"] label { flex: 1 1 auto; padding: 0.6rem 1rem !important; }
-    [data-testid="stRadio"] label p, [data-testid="stRadio"] label div { font-size: 1rem !important; }
+    [data-testid="stRadio"] label[data-baseweb="radio"] { flex: 1 1 auto; padding: 0.6rem 1rem !important; }
+    [data-testid="stRadio"] label[data-baseweb="radio"] p, [data-testid="stRadio"] label[data-baseweb="radio"] div { font-size: 1rem !important; }
 }
 
 /* ---------- Buttons ---------- */
@@ -848,6 +848,40 @@ h4 { font-size: 1.3rem !important; margin-top: .6rem; color: #0f3d4c !important;
 .kpi .lbl { font-size: .95rem; } .kpi .sub { font-size: .9rem; }
 .pmeta { font-size: .9rem; } .act .s { font-size: .88rem; } .chip { font-size: .85rem; }
 .hero p { font-size: 1.05rem; }
+
+/* ===== Sudhar: title box nahi, hero ka text, input text, 2 star ke choices ===== */
+/* widget ka title: sirf bold rangeen text, koi dibba nahi */
+[data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] label {
+    border: 0 !important; background: transparent !important; box-shadow: none !important;
+    padding: 0 !important; min-height: 0 !important; display: block !important;
+}
+[data-testid="stWidgetLabel"]::before, [data-testid="stWidgetLabel"] label::before { content: none !important; }
+[data-testid="stWidgetLabel"] p { font-size: 1.15rem !important; font-weight: 700 !important; color: #0f3d4c !important; margin-bottom: 4px; }
+/* gol button pakka chhupao */
+[data-testid="stRadio"] label[data-baseweb="radio"] > div:first-of-type { display: none !important; }
+[data-testid="stRadio"] label[data-baseweb="radio"] > div:nth-of-type(2) { display: block !important; }
+/* page header: saaf safed text */
+.hero h1 { color: #ffffff !important; }
+.hero p, .stMarkdown .hero p { color: #dbe9ee !important; font-size: 1rem !important; }
+/* input ke andar ka text */
+[data-baseweb="input"] input, [data-baseweb="base-input"] input, [data-baseweb="select"] div,
+textarea { font-size: 1.05rem !important; color: #14202b !important; font-weight: 500; }
+[data-baseweb="input"] > div, [data-baseweb="base-input"], [data-baseweb="select"] > div, textarea {
+    background: #ffffff !important; border: 1.5px solid #c3ced6 !important; border-radius: 10px !important;
+}
+/* upar wala (Section) bada aur gehra, neeche wala (Record type) chhota aur halka */
+[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"] {
+    min-height: 2.6rem !important; padding: 0.3rem 1rem !important; border-radius: 999px !important;
+    border-width: 1.5px !important; box-shadow: none !important;
+}
+[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"] p { font-size: .92rem !important; }
+[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {
+    background: #d9ebf1 !important; border-color: #1d6075 !important; box-shadow: none !important;
+}
+[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) p,
+[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) div { color: #0f3d4c !important; }
+[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked)::before { color: #0f3d4c; }
+[class*="st-key-admin_section"] [data-testid="stRadio"] label[data-baseweb="radio"] p { font-size: 1.12rem !important; font-weight: 700 !important; }
 </style>
 
 """
