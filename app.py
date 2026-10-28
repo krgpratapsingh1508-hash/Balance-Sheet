@@ -55,7 +55,8 @@ BLUE = "#0f3d4c"
 P_DASH = "Dashboard"
 P_NEW = "New entry"
 P_EDIT = "Admin panel"
-PAGES = [P_DASH, P_NEW, P_EDIT]  # Admin panel is always last
+P_SAVE = "My Savings"
+PAGES = [P_DASH, P_SAVE, P_NEW, P_EDIT]  # Admin panel is always last
 
 # Password needed to edit or delete old records. Override with EDIT_PASSWORD in Streamlit secrets.
 EDIT_PASSWORD_DEFAULT = "0610"
@@ -82,6 +83,53 @@ HI = {
     "Personal ledger": "निजी लेन-देन खाता",
     "Dashboard": "डैशबोर्ड",
     "New entry": "नई एंट्री",
+    # savings page
+    "My Savings": "मेरी बचत",
+    "See where your money goes and save more": "देखें पैसा कहाँ जा रहा है और ज़्यादा बचत करें",
+    "Monthly savings goal (₹)": "महीने की बचत का लक्ष्य (₹)",
+    "Save goal": "लक्ष्य सेव करें",
+    "Goal saved.": "लक्ष्य सेव हो गया।",
+    "Set a monthly savings goal to track it here.": "यहाँ ट्रैक करने के लिए महीने की बचत का लक्ष्य डालें।",
+    "Earned": "कमाई",
+    "Spent": "खर्च",
+    "Saved": "बचत",
+    "Given as udhaar": "उधार दिया",
+    "income this month": "इस महीने की आय",
+    "expenses + instalments + penalties": "खर्च + किस्तें + जुर्माना",
+    "earned − spent − udhaar given": "कमाई − खर्च − दिया हुआ उधार",
+    "lent minus repayments received": "उधार दिया − वापस मिले",
+    "Where did your income go?": "आपकी कमाई कहाँ गई?",
+    "Out of every ₹100 you earned this month:": "इस महीने की हर ₹100 कमाई में से:",
+    "Spent on expenses": "खर्च पर गया",
+    "Loan instalments / penalty": "लोन किस्त / जुर्माना",
+    "Lent to others": "दूसरों को उधार",
+    "Saved (kept)": "बचा हुआ",
+    "Overspent": "ज़्यादा खर्च हुआ",
+    "₹{v} out of every ₹100": "हर ₹100 में से ₹{v}",
+    "Goal progress": "लक्ष्य की प्रगति",
+    "{s} saved of {g} goal": "{g} के लक्ष्य में से {s} बचे",
+    "Goal reached. Well done!": "लक्ष्य पूरा हुआ। शाबाश!",
+    "You can still spend {v} per day (for {n} more days) and reach your goal.":
+        "लक्ष्य पाने के लिए आप रोज़ {v} तक खर्च कर सकते हैं (बाकी {n} दिन)।",
+    "Your goal is out of reach this month. Try to keep spending low for the remaining days.":
+        "इस महीने लक्ष्य दूर है। बाकी दिनों में खर्च कम रखने की कोशिश करें।",
+    "You have spent more than you earned this month.": "इस महीने आपने कमाई से ज़्यादा खर्च किया है।",
+    "Biggest spending categories this month": "इस महीने सबसे ज़्यादा खर्च की श्रेणियाँ",
+    "No expenses recorded this month.": "इस महीने कोई खर्च दर्ज नहीं है।",
+    "Tip: cutting {c} by 10% would save you {v} every month.":
+        "सुझाव: {c} में 10% कम करने से हर महीने {v} बचेंगे।",
+    "Last 6 months: saved vs spent": "पिछले 6 महीने: बचत बनाम खर्च",
+    "Total saved over all months: {v}": "सभी महीनों की कुल बचत: {v}",
+    "Monthly limit for a category": "किसी श्रेणी की महीने की सीमा",
+    "Category limits": "श्रेणी की सीमाएँ",
+    "Set a monthly limit per category (0 = no limit). You will see a warning when you cross it.":
+        "हर श्रेणी की महीने की सीमा तय करें (0 = कोई सीमा नहीं)। सीमा पार होने पर चेतावनी दिखेगी।",
+    "Save limits": "सीमाएँ सेव करें",
+    "Limits saved.": "सीमाएँ सेव हो गईं।",
+    "Limit crossed: {c} spent {s} of {l}": "सीमा पार: {c} में {l} में से {s} खर्च हो गए",
+    "{c}: {s} of {l}": "{c}: {l} में से {s}",
+    "Add some income and expenses first to see your savings.":
+        "बचत देखने के लिए पहले कुछ आय और खर्च दर्ज करें।",
     "Admin panel": "एडमिन पैनल",
     "Backup & restore": "बैकअप और रिस्टोर",
     "Sign in to access your ledger.": "अपना खाता खोलने के लिए साइन इन करें।",
@@ -1981,6 +2029,181 @@ def loan_entry_form():
             show_cash_left()
 
 
+def month_figures(month):
+    """Earned, spent (expenses + loan payments), net udhaar given and the spending split for one 'YYYY-MM' month."""
+    inc, ex, pays, tx = income_df(), expenses_df(), loan_pay_df(), txns_df()
+    earned = float(inc.loc[inc["month"] == month, "amount"].sum())
+    exm = ex[ex["month"] == month]
+    expenses = float(exm["amount"].sum())
+    loan = float(pays.loc[pays["date"].str[:7] == month, "amount"].sum()) if not pays.empty else 0.0
+    udhar = 0.0
+    if not tx.empty:
+        tm = tx[tx["date"].str[:7] == month]
+        out = tm.loc[tm["kind"].isin(["Money lent", "Repayment made"]), "amount"].sum()
+        back = tm.loc[tm["kind"].isin(["Repayment received", "Money borrowed"]), "amount"].sum()
+        udhar = max(float(out - back), 0.0)
+    return {"earned": earned, "expenses": expenses, "loan": loan, "udhar": udhar, "exm": exm}
+
+
+def page_savings():
+    hero("My Savings", "See where your money goes and save more")
+    today = date.today()
+    month = today.strftime("%Y-%m")
+    if income_df().empty and expenses_df().empty:
+        st.info(t("Add some income and expenses first to see your savings."))
+        st.button(t("Add first entry"), on_click=go, args=(P_NEW,), type="primary")
+        return
+
+    # ---- savings goal
+    goal = float(get_setting("save_goal", "0") or 0)
+    with st.form("goal_form"):
+        g1, g2 = st.columns([3, 1])
+        new_goal = g1.number_input(t("Monthly savings goal (₹)"), min_value=0.0, value=goal, step=500.0, format="%.2f")
+        g2.write("")
+        saved_goal = g2.form_submit_button(t("Save goal"), type="primary", use_container_width=True)
+    if saved_goal:
+        set_setting("save_goal", str(new_goal))
+        goal = float(new_goal)
+        st.success(t("Goal saved."))
+
+    f = month_figures(month)
+    spent = f["expenses"] + f["loan"]
+    saved = f["earned"] - spent - f["udhar"]
+
+    # ---- four simple numbers
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(kpi("Earned", inr(f["earned"]), "income this month", "g"), unsafe_allow_html=True)
+    c2.markdown(kpi("Spent", inr(spent), "expenses + instalments + penalties", "r"), unsafe_allow_html=True)
+    c3.markdown(kpi("Given as udhaar", inr(f["udhar"]), "lent minus repayments received", "b"), unsafe_allow_html=True)
+    c4.markdown(kpi("Saved", inr(saved), "earned − spent − udhaar given", "g" if saved >= 0 else "r"),
+                unsafe_allow_html=True)
+    st.write("")
+
+    # ---- where did the income go (per Rs 100)
+    st.subheader(t("Where did your income go?"))
+    if f["earned"] > 0:
+        e = f["earned"]
+        parts = [
+            ("Spent on expenses", f["expenses"] / e * 100, RED),
+            ("Loan instalments / penalty", f["loan"] / e * 100, "#8a6d1f"),
+            ("Lent to others", f["udhar"] / e * 100, BLUE),
+        ]
+        used = sum(p[1] for p in parts)
+        parts.append(("Saved (kept)", max(100 - used, 0.0), GREEN))
+        st.caption(t("Out of every ₹100 you earned this month:"))
+        bar = "".join(
+            f'<div style="width:{p[1] / max(used, 100) * 100:.2f}%;background:{p[2]}"></div>' for p in parts if p[1] > 0
+        )
+        st.markdown(
+            f'<div style="display:flex;height:26px;border-radius:4px;overflow:hidden;background:#e7ebee">{bar}</div>',
+            unsafe_allow_html=True,
+        )
+        legend = "".join(
+            f'<div class="act"><div class="l"><span style="display:inline-block;width:12px;height:12px;'
+            f'background:{col};border-radius:2px;margin-right:8px"></span>{t(name)}</div>'
+            f'<div class="a">{tf("₹{v} out of every ₹100", v=f"{pct:.0f}")}</div></div>'
+            for name, pct, col in parts
+        )
+        st.markdown(legend, unsafe_allow_html=True)
+        if used > 100:
+            st.error(t("You have spent more than you earned this month."))
+    else:
+        st.info(t("Income this month") + ": " + inr(0))
+    st.write("")
+
+    # ---- goal progress and daily allowance
+    if goal > 0:
+        st.subheader(t("Goal progress"))
+        st.progress(min(max(saved / goal, 0.0), 1.0))
+        st.caption(tf("{s} saved of {g} goal", s=inr(saved), g=inr(goal)))
+        days_left = calendar.monthrange(today.year, today.month)[1] - today.day + 1
+        if saved >= goal:
+            st.success(t("Goal reached. Well done!"))
+            if saved > goal and days_left > 0:
+                # saved is already net of spending so far, so (saved - goal) is what is still free to spend
+                st.info(tf("You can still spend {v} per day (for {n} more days) and reach your goal.",
+                           v=inr((saved - goal) / days_left), n=days_left))
+        else:
+            st.warning(t("Your goal is out of reach this month. Try to keep spending low for the remaining days."))
+    else:
+        st.caption(t("Set a monthly savings goal to track it here."))
+    st.write("")
+
+    # ---- biggest spending categories
+    st.subheader(t("Biggest spending categories this month"))
+    exm = f["exm"]
+    if exm.empty:
+        st.info(t("No expenses recorded this month."))
+    else:
+        by_cat = exm.groupby("category")["amount"].sum().sort_values(ascending=False).reset_index()
+        by_cat.columns = ["Category", "Total"]
+        by_cat["Label"] = by_cat["Category"].map(t)
+        chart = (
+            alt.Chart(by_cat.head(6))
+            .mark_bar(cornerRadiusEnd=2, size=18, color=RED)
+            .encode(
+                y=alt.Y("Label:N", sort="-x", title=None),
+                x=alt.X("Total:Q", title=t("Amount (₹)")),
+                tooltip=[alt.Tooltip("Label:N", title=t("Category")), alt.Tooltip("Total:Q", title=t("Total"), format=",.2f")],
+            )
+            .properties(height=max(120, 34 * min(len(by_cat), 6)))
+        )
+        st.altair_chart(chart, use_container_width=True)
+        top = by_cat.iloc[0]
+        st.caption(tf("Tip: cutting {c} by 10% would save you {v} every month.",
+                      c=t(top["Category"]), v=inr(top["Total"] * 0.10)))
+
+    # ---- category limits
+    st.subheader(t("Category limits"))
+    cats = [c for c in EXPENSE_CATS if c != "Cash"]
+    limits = {c: float(get_setting(f"limit_{c}", "0") or 0) for c in cats}
+    spent_by = exm.groupby("category")["amount"].sum().to_dict() if not exm.empty else {}
+    for c in cats:
+        lim, sp = limits[c], float(spent_by.get(c, 0.0))
+        if lim > 0:
+            if sp > lim:
+                st.error(tf("Limit crossed: {c} spent {s} of {l}", c=t(c), s=inr(sp), l=inr(lim)))
+            else:
+                st.progress(min(sp / lim, 1.0), text=tf("{c}: {s} of {l}", c=t(c), s=inr(sp), l=inr(lim)))
+    with st.expander(t("Monthly limit for a category")):
+        st.caption(t("Set a monthly limit per category (0 = no limit). You will see a warning when you cross it."))
+        with st.form("limit_form"):
+            cols = st.columns(2)
+            vals = {}
+            for i, c in enumerate(cats):
+                vals[c] = cols[i % 2].number_input(t(c), min_value=0.0, value=limits[c], step=500.0,
+                                                   format="%.0f", key=f"lim_{c}")
+            if st.form_submit_button(t("Save limits"), type="primary", use_container_width=True):
+                for c, v in vals.items():
+                    set_setting(f"limit_{c}", str(v))
+                st.success(t("Limits saved."))
+                st.rerun()
+    st.write("")
+
+    # ---- last 6 months
+    st.subheader(t("Last 6 months: saved vs spent"))
+    months = [str(x) for x in pd.period_range(end=pd.Period(today, freq="M"), periods=6, freq="M")]
+    rows = []
+    for m in months:
+        fm = month_figures(m)
+        rows.append({"Month": _month_label(m), "Saved": fm["earned"] - fm["expenses"] - fm["loan"] - fm["udhar"]})
+    hist = pd.DataFrame(rows)
+    hist["Sign"] = hist["Saved"].apply(lambda v: "pos" if v >= 0 else "neg")
+    hchart = (
+        alt.Chart(hist)
+        .mark_bar(cornerRadiusEnd=2)
+        .encode(
+            x=alt.X("Month:N", sort=None, title=None),
+            y=alt.Y("Saved:Q", title=t("Amount (₹)")),
+            color=alt.Color("Sign:N", scale=alt.Scale(domain=["pos", "neg"], range=[GREEN, RED]), legend=None),
+            tooltip=[alt.Tooltip("Month:N", title=t("Month")), alt.Tooltip("Saved:Q", title=t("Saved"), format=",.2f")],
+        )
+        .properties(height=220)
+    )
+    st.altair_chart(hchart, use_container_width=True)
+    st.caption(tf("Total saved over all months: {v}", v=inr(float(hist["Saved"].sum()))))
+
+
 def page_new_entry():
     hero("New entry", "Record a transaction, income or loan payment")
     typ = st.radio(
@@ -3002,6 +3225,7 @@ def main():
 
     {
         P_DASH: page_dashboard,
+        P_SAVE: page_savings,
         P_NEW: page_new_entry,
         P_EDIT: page_admin,
     }[st.session_state["page"]]()
