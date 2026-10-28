@@ -951,27 +951,29 @@ def _iso(v):
         return None
 
 
-def oldest_open_entry(rows, sign):
-    """(entry date, its return date or None) of the oldest part of the balance that is still unpaid."""
+def open_entries(rows, sign):
+    """Entries (oldest first) that are still unpaid, with the unpaid part of each. Oldest entries are settled first."""
     adds = rows[rows["signed"] * sign > 0].sort_values(["date", "id"])
     left = float(-(rows.loc[rows["signed"] * sign < 0, "signed"] * sign).sum())
+    out = []
     for r in adds.itertuples():
         amt = float(r.amount)
         if left >= amt - 0.005:
             left -= amt
             continue
-        return _iso(r.date), _iso(getattr(r, "due_date", ""))
-    return None
+        out.append({"date": _iso(r.date), "own_due": _iso(getattr(r, "due_date", "")), "rem": amt - left})
+        left = 0.0
+    return out
 
 
 def followup_alerts():
-    """Parties whose return date has arrived, plus parties marked 'will never pay'."""
+    """Parties with an entry whose return date has arrived, plus parties marked 'will never pay'."""
     today = date.today()
     s = summary_df()
     if s.empty:
         return [], []
     df = txns_df()
-    fu = query_df("SELECT party_id, mode, promise_date FROM followups")
+    fu = query_df("SELECT party_id, mode, promise_date, set_on FROM followups")
     fmap = {int(r.party_id): r for r in fu.itertuples()}
     alerts, never = [], []
     for r in s.itertuples():
@@ -982,32 +984,42 @@ def followup_alerts():
                 clear_followup(pid)  # settled, so the old follow-up is no longer needed
             continue
         sign = 1 if r.balance > 0 else -1
-        found = oldest_open_entry(df[df["party_id"] == pid], sign)
-        if found is None or found[0] is None:
+        ents = [e for e in open_entries(df[df["party_id"] == pid], sign) if e["date"]]
+        if not ents:
             continue
-        since, own_due = found
+        total = abs(float(r.balance))
         item = {
-            "id": pid, "name": r.name, "phone": r.phone or "", "amt": abs(float(r.balance)),
-            "sign": sign, "since": since, "days": (today - since).days, "dated": True, "promise_passed": None,
+            "id": pid, "name": r.name, "phone": r.phone or "", "amt": total, "sign": sign,
+            "since": ents[0]["date"], "days": (today - ents[0]["date"]).days, "dated": True, "promise_passed": None,
         }
         if f is not None and f.mode == "never" and sign > 0:
             never.append(item)
             continue
         promise = _iso(f.promise_date) if (f is not None and f.mode == "date") else None
-        if promise:
-            due_on = promise  # a date chosen on the alert replaces the original return date
-        elif own_due:
-            due_on = own_due
-        else:
-            item["dated"] = False  # old entry without a return date
-            due_on = add_months(since, FOLLOW_RECEIVABLE_MONTHS) if sign > 0 else since + timedelta(days=FOLLOW_PAYABLE_DAYS)
-        # Hidden until the date arrives (but keep the message box open while it is being used)
-        if today < due_on and f"fu_txt_{pid}" not in st.session_state:
+        set_on = _iso(f.set_on) if f is not None else None
+        # Each unpaid entry has its own return date. Entries saved without a date use the old limits.
+        for e in ents:
+            if e["own_due"]:
+                e["due"], e["dated"] = e["own_due"], True
+            else:
+                e["due"] = (add_months(e["date"], FOLLOW_RECEIVABLE_MONTHS) if sign > 0
+                            else e["date"] + timedelta(days=FOLLOW_PAYABLE_DAYS))
+                e["dated"] = False
+            # A date chosen on an alert replaces the return date of the entries that were already due then
+            if promise and (set_on is None or e["due"] <= set_on):
+                e["due"], e["dated"] = promise, True
+        due_now = [e for e in ents if e["due"] <= today]
+        # Hidden until a date arrives (but keep the message box open while it is being used)
+        if not due_now and f"fu_txt_{pid}" not in st.session_state:
             continue
-        if promise and promise < today:
+        pick = min(due_now or ents, key=lambda e: e["due"])
+        item.update(
+            since=pick["date"], days=(today - pick["date"]).days, dated=pick["dated"], due=pick["due"],
+            over=(today - pick["due"]).days,
+            amt=sum(e["rem"] for e in due_now) if due_now else total,
+        )
+        if promise and pick["due"] == promise and promise < today:
             item["promise_passed"] = promise
-        item["due"] = due_on
-        item["over"] = (today - due_on).days
         alerts.append(item)
     alerts.sort(key=lambda a: a["due"])
     return alerts, never
