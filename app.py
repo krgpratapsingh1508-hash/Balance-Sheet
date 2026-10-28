@@ -353,8 +353,15 @@ HI = {
         "यह टेम्पलेट भरकर नीचे अपलोड करें। Instructions शीट में हर कॉलम समझाया गया है।",
     "Select a backup file": "बैकअप फ़ाइल चुनें",
     "Restore": "रिस्टोर करें",
-    "The file must contain at least one of these sheets: Udhari, Income, Loan, Kist_Penalty, Kharcha.":
-        "फ़ाइल में इन शीट्स में से कम से कम एक होनी चाहिए: Udhari, Income, Loan, Kist_Penalty, Kharcha।",
+    "The file must contain at least one of these sheets: Udhari, Income, Loan, Kist_Penalty, Kharcha, Parties, Cash_Kharch, Followup.":
+        "फ़ाइल में इन शीट्स में से कम से कम एक होनी चाहिए: Udhari, Income, Loan, Kist_Penalty, Kharcha, Parties, Cash_Kharch, Followup।",
+    "The Parties sheet must have these columns: ": "Parties शीट में ये कॉलम होने चाहिए: ",
+    "The Cash_Kharch sheet must have these columns: ": "Cash_Kharch शीट में ये कॉलम होने चाहिए: ",
+    "The Followup sheet must have these columns: ": "Followup शीट में ये कॉलम होने चाहिए: ",
+    "Parties: {a} parties restored with their phone numbers.": "पार्टियाँ: {a} पार्टियाँ फ़ोन नंबर सहित वापस आ गईं।",
+    "Cash spending: {a} added, {s} already present, {b} invalid rows skipped.":
+        "नकद खर्च: {a} जुड़े, {s} पहले से थे, {b} गलत पंक्तियाँ छोड़ी गईं।",
+    "Follow-ups: {a} added, {s} already present.": "फ़ॉलो-अप: {a} जुड़े, {s} पहले से थे।",
     "The Udhari sheet must have these columns: party, date, kind, amount, note":
         "Udhari शीट में ये कॉलम होने चाहिए: party, date, kind, amount, note",
     "The Income sheet must have these columns: date, amount, source, note":
@@ -1880,11 +1887,14 @@ def page_new_entry():
             st.rerun()
 
 
-SHEETS = ["Udhari", "Income", "Loan", "Kist_Penalty", "Kharcha"]
+SHEETS = ["Udhari", "Income", "Loan", "Kist_Penalty", "Kharcha", "Parties", "Cash_Kharch", "Followup"]
 EXP_COLS = ["date", "amount", "place", "category", "note"]
 LOAN_COLS = ["name", "loan_amount", "kist_amount", "total_kists", "first_due",
              "penalty_type", "penalty_amount", "note"]
 PAY_COLS = ["loan", "date", "kind", "amount", "note"]
+PARTY_COLS = ["name", "phone"]
+CASH_COLS = ["cash_date", "cash_amount", "cash_place", "date", "amount", "place", "note"]
+FOLLOW_COLS = ["party", "mode", "promise_date", "set_on"]
 
 
 def to_xlsx_multi(sheets):
@@ -1902,7 +1912,7 @@ def to_xlsx_multi(sheets):
 
 def _clean(d):
     d = d.fillna("")
-    for c in ("date", "first_due", "due_date"):
+    for c in ("date", "first_due", "due_date", "cash_date", "promise_date", "set_on"):
         if c in d.columns:
             d[c] = d[c].astype(str).str[:10]
     return d
@@ -1914,7 +1924,8 @@ def read_backup_all(f):
         out = {k: None for k in SHEETS}
         out["Udhari"] = _clean(pd.read_csv(f))
         return out
-    sheets = pd.read_excel(f, sheet_name=None, dtype={"date": str, "first_due": str, "due_date": str})
+    sheets = pd.read_excel(f, sheet_name=None, dtype={"date": str, "first_due": str, "due_date": str, "phone": str,
+                                                  "cash_date": str, "promise_date": str, "set_on": str})
     return {k: _clean(sheets[k]) if k in sheets else None for k in SHEETS}
 
 
@@ -1969,6 +1980,9 @@ def template_xlsx():
     make(ws6, EXP_COLS, [14, 14, 28, 22, 36])
     dropdown(ws6, EXPENSE_CATS[:-1], "D2:D1000", strict=False)
 
+    ws7 = wb.create_sheet("Parties")
+    make(ws7, PARTY_COLS, [28, 18], date_cols=("phone",))
+
     ws5 = wb.create_sheet("Instructions")
     lines = [
         ("How to prepare the restore file", True),
@@ -1995,6 +2009,10 @@ def template_xlsx():
         ("date, amount, note -> as above", False),
         ("place    -> where the money was spent (required)", False),
         ("category -> for example Ghar / Ration, Petrol / Travel, or your own label", False),
+        ("", False),
+        ("Parties sheet (phone numbers)", True),
+        ("name  -> party name, exactly as on the Udhari sheet", False),
+        ("phone -> phone number (kept as text)", False),
         ("", False),
         ("Loan sheet (one loan per row)", True),
         ("name           -> loan name (must be unique)", False),
@@ -2076,6 +2094,16 @@ def page_backup():
     pay_export = pays[PAY_COLS[:1] + PAY_COLS[1:]]
     exp_export = expenses_df()[EXP_COLS]
     phones = parties_df()
+    party_export = phones[["name", "phone"]].fillna("")
+    cash_export = query_df(
+        "SELECT e.edate AS cash_date, e.amount AS cash_amount, e.place AS cash_place, "
+        "c.sdate AS date, c.amount, c.place, c.note FROM cash_spends c "
+        "JOIN expenses e ON e.id = c.expense_id ORDER BY c.sdate, c.id"
+    ).fillna("")
+    follow_export = query_df(
+        "SELECT p.name AS party, f.mode, f.promise_date, f.set_on FROM followups f "
+        "JOIN parties p ON p.id = f.party_id ORDER BY p.name"
+    ).fillna("")
     empty = export.empty and inc_export.empty and loan_export.empty and exp_export.empty
 
     c1, c2 = st.columns(2)
@@ -2099,6 +2127,8 @@ def page_backup():
                 "Udhari": export, "Income": inc_export,
                 "Loan": loan_export, "Kist_Penalty": pay_export,
                 "Kharcha": exp_export,
+                "Parties": party_export, "Cash_Kharch": cash_export,
+                "Followup": follow_export,
             }),
             file_name=f"udhari_backup_{date.today().isoformat()}.xlsx",
             mime=XLSX_MIME, disabled=empty, type="primary",
@@ -2115,12 +2145,29 @@ def page_backup():
         up = st.file_uploader(t("Select a backup file"), type=["xlsx", "csv"], label_visibility="collapsed")
         if up is not None and st.button(t("Restore")):
             sheets = read_backup_all(up)
-            ud, ic, lo, kp, ke = (sheets[k] for k in SHEETS)
-            if all(x is None for x in (ud, ic, lo, kp, ke)):
-                st.error(t("The file must contain at least one of these sheets: Udhari, Income, Loan, Kist_Penalty, Kharcha."))
+            ud, ic, lo, kp, ke, pa, cs, fu = (sheets[k] for k in SHEETS)
+            if all(x is None for x in (ud, ic, lo, kp, ke, pa, cs, fu)):
+                st.error(t("The file must contain at least one of these sheets: Udhari, Income, Loan, Kist_Penalty, Kharcha, Parties, Cash_Kharch, Followup."))
                 return
 
             msgs = []
+            if pa is not None:
+                # phone numbers pehle, taaki neeche banne wali parties me number pehle se jud jaye
+                if not set(PARTY_COLS).issubset(pa.columns):
+                    st.error(t("The Parties sheet must have these columns: ") + ", ".join(PARTY_COLS))
+                    return
+                done = 0
+                for _, r in pa.iterrows():
+                    nm = str(r["name"]).strip()
+                    ph = str(r["phone"]).strip()
+                    if ph.endswith(".0") and ph[:-2].isdigit():
+                        ph = ph[:-2]
+                    if not nm or nm.lower() == "nan":
+                        continue
+                    get_or_create_party(nm, "" if ph.lower() == "nan" else ph)
+                    done += 1
+                msgs.append(tf("Parties: {a} parties restored with their phone numbers.", a=done))
+
             if ud is not None:
                 if "kind" in ud.columns:
                     ud["kind"] = ud["kind"].replace(LEGACY_KINDS)
@@ -2200,6 +2247,47 @@ def page_backup():
                     added += 1
                 msgs.append(tf("Expenses: {a} added, {s} already present, {b} invalid rows skipped.", a=added, s=skipped, b=bad))
 
+            if cs is not None:
+                if not set(CASH_COLS).issubset(cs.columns):
+                    st.error(t("The Cash_Kharch sheet must have these columns: ") + ", ".join(CASH_COLS))
+                    return
+                cash_ids = {}
+                for r in expenses_df().itertuples():
+                    if r.category == "Cash":
+                        cash_ids[(str(r.date)[:10], round(float(r.amount), 2), str(r.place).strip())] = int(r.id)
+                have = {
+                    (r.cash_date, round(float(r.cash_amount), 2), r.cash_place, str(r.date), round(float(r.amount), 2), r.place, str(r.note))
+                    for r in query_df(
+                        "SELECT e.edate AS cash_date, e.amount AS cash_amount, e.place AS cash_place, "
+                        "c.sdate AS date, c.amount, c.place, c.note FROM cash_spends c "
+                        "JOIN expenses e ON e.id = c.expense_id"
+                    ).itertuples()
+                }
+                added = skipped = bad = 0
+                for _, r in cs.iterrows():
+                    try:
+                        ck = (str(r["cash_date"])[:10], round(float(r["cash_amount"]), 2), str(r["cash_place"]).strip())
+                        amt = float(r["amount"])
+                        sd = str(r["date"])[:10]
+                        date.fromisoformat(sd)
+                        pl = str(r["place"]).strip()
+                        if ck not in cash_ids or amt <= 0 or not pl:
+                            raise ValueError
+                    except (ValueError, TypeError):
+                        bad += 1
+                        continue
+                    key = (ck[0], ck[1], ck[2], sd, round(amt, 2), pl, str(r["note"]))
+                    if key in have:
+                        skipped += 1
+                        continue
+                    run(
+                        "INSERT INTO cash_spends(expense_id, sdate, amount, place, note) VALUES (?,?,?,?,?)",
+                        (cash_ids[ck], sd, amt, pl, str(r["note"])),
+                    )
+                    have.add(key)
+                    added += 1
+                msgs.append(tf("Cash spending: {a} added, {s} already present, {b} invalid rows skipped.", a=added, s=skipped, b=bad))
+
             if lo is not None:
                 if not set(LOAN_COLS).issubset(lo.columns):
                     st.error(t("The Loan sheet must have these columns: ") + ", ".join(LOAN_COLS))
@@ -2267,6 +2355,29 @@ def page_backup():
                 msgs.append(
                     tf("Instalments/penalties: {a} added, {s} already present, {b} invalid rows skipped.", a=added, s=skipped, b=bad)
                 )
+
+            if fu is not None:
+                if not set(FOLLOW_COLS).issubset(fu.columns):
+                    st.error(t("The Followup sheet must have these columns: ") + ", ".join(FOLLOW_COLS))
+                    return
+                has = set(query_df("SELECT party_id FROM followups")["party_id"].astype(int))
+                added = skipped = 0
+                for _, r in fu.iterrows():
+                    nm, mode = str(r["party"]).strip(), str(r["mode"]).strip()
+                    if not nm or not mode or mode.lower() == "nan":
+                        continue
+                    pid = get_or_create_party(nm)
+                    if pid in has:
+                        skipped += 1
+                        continue
+                    pd_, so = str(r["promise_date"])[:10], str(r["set_on"])[:10]
+                    run(
+                        "INSERT INTO followups(party_id, mode, promise_date, set_on) VALUES (?,?,?,?)",
+                        (pid, mode, "" if pd_.lower() == "nan" else pd_, so if so and so.lower() != "nan" else date.today().isoformat()),
+                    )
+                    has.add(pid)
+                    added += 1
+                msgs.append(tf("Follow-ups: {a} added, {s} already present.", a=added, s=skipped))
 
             st.success("  \n".join(msgs))
 
