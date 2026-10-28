@@ -4,6 +4,7 @@ Three pages: Dashboard, New entry, Backup & restore.
 """
 
 import calendar
+import re
 import hmac
 import sqlite3
 from contextlib import closing
@@ -56,6 +57,423 @@ PAGES = [P_DASH, P_NEW, P_BACKUP, P_EDIT]  # Admin panel is always last
 
 # Password needed to edit or delete old records. Override with EDIT_PASSWORD in Streamlit secrets.
 EDIT_PASSWORD_DEFAULT = "0610"
+
+# ---------------------------------------------------------------- language (English / Hindi)
+LANGS = {"en": "English", "hi": "हिन्दी"}
+
+# Stored values stay as they are in the database. These only change how they are shown in English.
+EN_FIX = {
+    "Ghar / Ration": "Home / Groceries",
+    "Khana-Peena": "Food & Drinks",
+    "Petrol / Travel": "Fuel / Travel",
+    "Bijli / Pani / Bill": "Electricity / Water / Bills",
+    "Dawai / Ilaaj": "Medicine / Treatment",
+    "Padhai / Fees": "Education / Fees",
+    "Dukaan / Business": "Shop / Business",
+    "Shaadi / Function": "Wedding / Function",
+    "Prize / Inaam": "Prize",
+}
+
+HI = {
+    # brand, pages, navigation
+    "Udhari Khata": "उधारी खाता",
+    "Personal ledger": "निजी लेन-देन खाता",
+    "Dashboard": "डैशबोर्ड",
+    "New entry": "नई एंट्री",
+    "Admin panel": "एडमिन पैनल",
+    "Backup & restore": "बैकअप और रिस्टोर",
+    "Sign in to access your ledger.": "अपना खाता खोलने के लिए साइन इन करें।",
+    "Password": "पासवर्ड",
+    "Sign in": "साइन इन",
+    "Incorrect password.": "गलत पासवर्ड।",
+    "Language / भाषा": "Language / भाषा",
+    # common labels
+    "Amount": "राशि",
+    "Amount (₹)": "राशि (₹)",
+    "Date": "तारीख",
+    "Note": "नोट",
+    "Note (optional)": "नोट (वैकल्पिक)",
+    "Name": "नाम",
+    "Status": "स्थिति",
+    "Month": "महीना",
+    "Category": "श्रेणी",
+    "Place": "जगह",
+    "Entries": "एंट्रियाँ",
+    "Total": "कुल",
+    "Last": "आखिरी",
+    "Share %": "हिस्सा %",
+    "Type": "प्रकार",
+    "Group": "समूह",
+    "Direction": "दिशा",
+    "In": "आया",
+    "Out": "गया",
+    "All": "सभी",
+    "Other": "अन्य",
+    "Phone": "फ़ोन",
+    "Phone (required)": "फ़ोन (ज़रूरी)",
+    "Save changes": "बदलाव सेव करें",
+    "Delete": "हटाएँ",
+    "Lock": "लॉक करें",
+    # statuses and kinds
+    "Receivable": "मिलना बाकी",
+    "Payable": "देना बाकी",
+    "Settled": "चुकता",
+    "Money lent": "उधार दिया",
+    "Repayment received": "पैसे वापस मिले",
+    "Money borrowed": "उधार लिया",
+    "Repayment made": "पैसे वापस दिए",
+    "Income": "आय",
+    "Instalment": "किस्त",
+    "Penalty": "जुर्माना",
+    "Lending / borrowing": "उधार लेन-देन",
+    "Loan payments": "लोन भुगतान",
+    "Expense": "खर्च",
+    "Expenses": "खर्च",
+    "Loan": "लोन",
+    "Loans": "लोन",
+    "Loan / instalment": "लोन / किस्त",
+    # income sources and expense categories
+    "Salary": "वेतन",
+    "Business": "व्यापार",
+    "Lottery": "लॉटरी",
+    "Bonus": "बोनस",
+    "Overtime": "ओवरटाइम",
+    "Commission": "कमीशन",
+    "Rent": "किराया",
+    "Interest": "ब्याज",
+    "Gift": "उपहार",
+    "Prize / Inaam": "इनाम",
+    "Refund": "रिफ़ंड",
+    "Ghar / Ration": "घर / राशन",
+    "Khana-Peena": "खाना-पीना",
+    "Petrol / Travel": "पेट्रोल / यात्रा",
+    "Bijli / Pani / Bill": "बिजली / पानी / बिल",
+    "Dawai / Ilaaj": "दवाई / इलाज",
+    "Shopping": "शॉपिंग",
+    "Padhai / Fees": "पढ़ाई / फ़ीस",
+    "Dukaan / Business": "दुकान / व्यापार",
+    "Shaadi / Function": "शादी / समारोह",
+    # dashboard
+    "No records yet. Add your first entry to get started.": "अभी कोई रिकॉर्ड नहीं है। शुरू करने के लिए पहली एंट्री जोड़ें।",
+    "Add first entry": "पहली एंट्री जोड़ें",
+    "Your financial position as of {d}": "{d} तक आपकी आर्थिक स्थिति",
+    "from {n} parties": "{n} पार्टियों से",
+    "to {n} parties": "{n} पार्टियों को",
+    "Net balance": "शुद्ध बैलेंस",
+    "receivable − payable": "मिलना बाकी − देना बाकी",
+    "Income this month": "इस महीने की आय",
+    "Largest balances": "सबसे बड़े बैलेंस",
+    "All balances are settled.": "सभी बैलेंस चुकता हैं।",
+    "Recent activity": "हाल की गतिविधि",
+    "Monthly income": "मासिक आय",
+    "Total income to date: {a} across {n} entries": "अब तक की कुल आय: {a} ({n} एंट्रियों में)",
+    "All parties": "सभी पार्टियाँ",
+    "Search by name": "नाम से खोजें",
+    "Filter": "फ़िल्टर",
+    "No matching parties.": "कोई मिलती-जुलती पार्टी नहीं मिली।",
+    "Add entry": "एंट्री जोड़ें",
+    "last entry {d}": "आखिरी एंट्री {d}",
+    "no entries yet": "अभी कोई एंट्री नहीं",
+    "{n} entries, {last}": "{n} एंट्रियाँ, {last}",
+    "{n} entries": "{n} एंट्रियाँ",
+    # cash flow
+    "Cash flow": "नकद प्रवाह",
+    "Total income": "कुल आय",
+    "to date": "अब तक",
+    "Total outflow": "कुल गया हुआ पैसा",
+    "lent, repaid, instalments, penalties, expenses": "उधार दिया, चुकाया, किस्तें, जुर्माना, खर्च",
+    "Net cash position": "शुद्ध नकद स्थिति",
+    "income + {v} other inflow − outflow": "आय + {v} अन्य आमद − गया हुआ पैसा",
+    "Net cash position: {v}": "शुद्ध नकद स्थिति: {v}",
+    "Outflow: lent {a}, repaid {b}, instalments {c}, penalties {d}, expenses {e}. Other inflow: repayments received {f}, borrowed {g}.":
+        "गया हुआ पैसा: उधार दिया {a}, वापस दिया {b}, किस्तें {c}, जुर्माना {d}, खर्च {e}। अन्य आमद: वापस मिले {f}, उधार लिया {g}।",
+    "Monthly breakdown": "महीने का हिसाब",
+    "Other inflow": "अन्य आमद",
+    "Outflow": "गया हुआ पैसा",
+    "Net": "शुद्ध",
+    "Cumulative": "कुल जमा",
+    # expenses
+    "Expenses: where the money went": "खर्च: पैसा कहाँ-कहाँ गया",
+    "Period": "अवधि",
+    "All time": "पूरा समय",
+    "No expenses in this period.": "इस अवधि में कोई खर्च नहीं है।",
+    "Total expenses": "कुल खर्च",
+    "Biggest spend": "सबसे ज़्यादा खर्च",
+    "Top category": "सबसे ऊपर की श्रेणी",
+    "**Spent where**": "**कहाँ कितना गया**",
+    "**Category-wise**": "**श्रेणी के अनुसार**",
+    "Place-wise full list": "जगह के अनुसार पूरी सूची",
+    "All expense entries": "सभी खर्च एंट्रियाँ",
+    # loans
+    "Loans and instalments": "लोन और किस्तें",
+    "Loan outstanding": "लोन बकाया",
+    "Penalty outstanding": "जुर्माना बकाया",
+    "charged on late instalments": "देर से दी गई किस्तों पर लगा",
+    "Overdue instalments": "देर हो चुकी किस्तें",
+    "not paid on time": "समय पर नहीं चुकाई गईं",
+    "instalments {a} + penalty {b}": "किस्तें {a} + जुर्माना {b}",
+    "{n} overdue": "{n} की देर",
+    "Penalty due": "जुर्माना बाकी",
+    "Fully paid": "पूरा चुकाया",
+    "On schedule": "समय पर",
+    "next due {d}": "अगली किस्त {d}",
+    "all instalments paid": "सभी किस्तें चुकाई गईं",
+    "{k} × {n} instalments, {nxt}": "{k} × {n} किस्तें, {nxt}",
+    "Outstanding (incl. penalty)": "बकाया (जुर्माना मिलाकर)",
+    "{a} of {b} instalments paid": "{b} में से {a} किस्तें चुकाई गईं",
+    "Penalty due: {v}": "जुर्माना बाकी: {v}",
+    "Instalments due {a} + penalty {b}": "बकाया किस्तें {a} + जुर्माना {b}",
+    "Instalment schedule": "किस्तों का कार्यक्रम",
+    "No.": "क्र.",
+    "Due date": "देय तारीख",
+    "Paid on": "चुकाने की तारीख",
+    "Days late": "देर के दिन",
+    # income form
+    "Source": "स्रोत",
+    "Specify source": "स्रोत लिखें",
+    "e.g. Tuition, Freelance": "जैसे: ट्यूशन, फ़्रीलांस",
+    "Date received": "पैसे मिलने की तारीख",
+    "e.g. overtime, commission": "जैसे: ओवरटाइम, कमीशन",
+    "Save income": "आय सेव करें",
+    "Amount must be greater than 0.": "राशि 0 से ज़्यादा होनी चाहिए।",
+    "Specify the source when 'Other' is selected.": "'अन्य' चुनने पर स्रोत लिखना ज़रूरी है।",
+    "Income of {a} saved.": "{a} की आय सेव हो गई।",
+    "Income saved": "आय सेव हो गई",
+    # expense form
+    "Specify category": "श्रेणी लिखें",
+    "e.g. Gift, Repair": "जैसे: उपहार, मरम्मत",
+    "Where was it spent?": "कहाँ खर्च किया?",
+    "e.g. Big Bazaar, Petrol pump, Medical store": "जैसे: बिग बाज़ार, पेट्रोल पंप, मेडिकल स्टोर",
+    "e.g. monthly ration, bike petrol": "जैसे: महीने का राशन, बाइक का पेट्रोल",
+    "Save expense": "खर्च सेव करें",
+    "Previous places: ": "पहले की जगहें: ",
+    "Enter where the money was spent.": "लिखें कि पैसा कहाँ खर्च हुआ।",
+    "Specify the category when 'Other' is selected.": "'अन्य' चुनने पर श्रेणी लिखना ज़रूरी है।",
+    "Expense of {a} at {p} saved.": "{p} पर {a} का खर्च सेव हो गया।",
+    "Expense saved": "खर्च सेव हो गया",
+    # loan form
+    "Action": "क्या करना है",
+    "Add new loan": "नया लोन जोड़ें",
+    "Record payment": "भुगतान दर्ज करें",
+    "How is penalty charged on late instalments?": "देर से दी गई किस्त पर जुर्माना कैसे लगता है?",
+    "Fixed amount per late instalment (repeats for each extra month it stays unpaid)":
+        "हर देर वाली किस्त पर तय रकम (जितने ज़्यादा महीने बकाया रहे, हर महीने दोहराई जाती है)",
+    "Fixed amount per day of delay": "देरी के हर दिन पर तय रकम",
+    "% interest per month on the late instalment (pro rata by day)": "देर वाली किस्त पर हर महीने % ब्याज (दिन के हिसाब से)",
+    "Loan name": "लोन का नाम",
+    "e.g. Bank loan, Personal loan from Ramesh": "जैसे: बैंक लोन, रमेश से लिया निजी लोन",
+    "Loan amount (₹, optional)": "लोन की राशि (₹, वैकल्पिक)",
+    "Instalment amount (₹)": "किस्त की राशि (₹)",
+    "Number of instalments": "किस्तों की संख्या",
+    "Penalty (₹ per day)": "जुर्माना (₹ प्रति दिन)",
+    "Interest (% per month)": "ब्याज (% प्रति माह)",
+    "Penalty (₹ per late instalment)": "जुर्माना (₹ प्रति देर वाली किस्त)",
+    "First due date": "पहली किस्त की तारीख",
+    "e.g. vehicle loan, due on the 5th": "जैसे: गाड़ी का लोन, हर महीने 5 तारीख को देय",
+    "Save loan": "लोन सेव करें",
+    "Enter a loan name.": "लोन का नाम लिखें।",
+    "Instalment amount must be greater than 0.": "किस्त की राशि 0 से ज़्यादा होनी चाहिए।",
+    "A loan with this name already exists. Use a different name.": "इस नाम का लोन पहले से मौजूद है। कोई दूसरा नाम रखें।",
+    "Loan '{name}' saved: {n} instalments × {k} = {tot}.": "लोन '{name}' सेव हो गया: {n} किस्तें × {k} = {tot}।",
+    "Loan saved": "लोन सेव हो गया",
+    "Add a loan first, using 'Add new loan'.": "पहले 'नया लोन जोड़ें' से एक लोन जोड़ें।",
+    "Instalments due: {a}, penalty due: {b}": "बकाया किस्तें: {a}, बकाया जुर्माना: {b}",
+    ", next due {d}": ", अगली किस्त {d}",
+    ", all instalments paid": ", सभी किस्तें चुकाई गईं",
+    "{n} instalment(s) overdue. Penalty accrued to date: {p}": "{n} किस्त(ें) देर से हैं। अब तक का जुर्माना: {p}",
+    "Payment type": "भुगतान का प्रकार",
+    "Payment date": "भुगतान की तारीख",
+    "e.g. online, cash": "जैसे: ऑनलाइन, नकद",
+    "Save payment": "भुगतान सेव करें",
+    "{loan}: {kind} of {a} saved.": "{loan}: {a} की {kind} सेव हो गई।",
+    "Payment saved": "भुगतान सेव हो गया",
+    # new entry page
+    "Record a transaction, income or loan payment": "लेन-देन, आय या लोन का भुगतान दर्ज करें",
+    "Entry type": "एंट्री का प्रकार",
+    "-- New party --": "-- नई पार्टी --",
+    "Entry saved": "एंट्री सेव हो गई",
+    "Existing party": "पहले से मौजूद पार्टी",
+    "Or new party name": "या नई पार्टी का नाम",
+    "e.g. Ramesh Sharma": "जैसे: रमेश शर्मा",
+    "This party's saved number. It is used for every entry.": "इस पार्टी का सेव किया हुआ नंबर। हर एंट्री में यही इस्तेमाल होगा।",
+    "Transaction type": "लेन-देन का प्रकार",
+    "e.g. shop supplies, wedding expenses": "जैसे: दुकान का सामान, शादी का खर्च",
+    "Select or enter a party name.": "पार्टी चुनें या उसका नाम लिखें।",
+    "Phone number is required (at least 10 digits).": "फ़ोन नंबर ज़रूरी है (कम से कम 10 अंक)।",
+    "Entry saved: {a} with {n}.": "एंट्री सेव हो गई: {n} के साथ {a}।",
+    # backup & restore
+    "Keep a safe copy of your records": "अपने रिकॉर्ड की सुरक्षित कॉपी रखें",
+    "All data has been deleted.": "सारा डेटा हटा दिया गया है।",
+    "On Streamlit Cloud the database file can be lost when the app restarts. Download an Excel backup regularly.":
+        "Streamlit Cloud पर ऐप रीस्टार्ट होने पर डेटाबेस फ़ाइल खो सकती है। नियमित रूप से Excel बैकअप डाउनलोड करें।",
+    "#### Delete all data": "#### सारा डेटा हटाएँ",
+    "Delete all data": "सारा डेटा हटाएँ",
+    "Danger zone": "खतरे वाला हिस्सा",
+    "This permanently deletes all lending records, parties, income, expenses, loans and instalments. It cannot be undone. Download an Excel backup first.":
+        "यह उधार रिकॉर्ड, पार्टियाँ, आय, खर्च, लोन और किस्तें हमेशा के लिए हटा देगा। इसे वापस नहीं किया जा सकता। पहले Excel बैकअप डाउनलोड कर लें।",
+    "I understand that all data will be deleted": "मैं समझता/समझती हूँ कि सारा डेटा हट जाएगा",
+    "Type DELETE to confirm": "पुष्टि के लिए DELETE टाइप करें",
+    "Currently stored: {a} lending entries, {b} parties, {c} income entries, {d} expense entries, {e} loans, {f} instalment/penalty payments":
+        "अभी सेव है: {a} उधार एंट्रियाँ, {b} पार्टियाँ, {c} आय एंट्रियाँ, {d} खर्च एंट्रियाँ, {e} लोन, {f} किस्त/जुर्माना भुगतान",
+    "{a} lending entries, {b} parties, {c} income entries, {d} expense entries, {e} loans":
+        "{a} उधार एंट्रियाँ, {b} पार्टियाँ, {c} आय एंट्रियाँ, {d} खर्च एंट्रियाँ, {e} लोन",
+    "#### Backup": "#### बैकअप",
+    "Download Excel backup": "Excel बैकअप डाउनलोड करें",
+    "#### Restore": "#### रिस्टोर",
+    "Download blank restore template": "खाली रिस्टोर टेम्पलेट डाउनलोड करें",
+    "Fill in this template and upload it below. The Instructions sheet explains each column.":
+        "यह टेम्पलेट भरकर नीचे अपलोड करें। Instructions शीट में हर कॉलम समझाया गया है।",
+    "Select a backup file": "बैकअप फ़ाइल चुनें",
+    "Restore": "रिस्टोर करें",
+    "The file must contain at least one of these sheets: Udhari, Income, Loan, Kist_Penalty, Kharcha.":
+        "फ़ाइल में इन शीट्स में से कम से कम एक होनी चाहिए: Udhari, Income, Loan, Kist_Penalty, Kharcha।",
+    "The Udhari sheet must have these columns: party, date, kind, amount, note":
+        "Udhari शीट में ये कॉलम होने चाहिए: party, date, kind, amount, note",
+    "The Income sheet must have these columns: date, amount, source, note":
+        "Income शीट में ये कॉलम होने चाहिए: date, amount, source, note",
+    "The Kharcha sheet must have these columns: ": "Kharcha शीट में ये कॉलम होने चाहिए: ",
+    "The Loan sheet must have these columns: ": "Loan शीट में ये कॉलम होने चाहिए: ",
+    "The Kist_Penalty sheet must have these columns: ": "Kist_Penalty शीट में ये कॉलम होने चाहिए: ",
+    "Unrecognised 'kind' values: {v}": "'kind' के ये मान पहचाने नहीं गए: {v}",
+    "Udhari: {a} entries added, {s} already present.": "Udhari: {a} एंट्रियाँ जुड़ीं, {s} पहले से मौजूद थीं।",
+    "Income: {a} entries added, {s} already present.": "Income: {a} एंट्रियाँ जुड़ीं, {s} पहले से मौजूद थीं।",
+    "Expenses: {a} added, {s} already present, {b} invalid rows skipped.":
+        "खर्च: {a} जुड़े, {s} पहले से मौजूद थे, {b} गलत पंक्तियाँ छोड़ी गईं।",
+    "Loan: {a} added, {s} already present, {b} invalid rows skipped.":
+        "लोन: {a} जुड़े, {s} पहले से मौजूद थे, {b} गलत पंक्तियाँ छोड़ी गईं।",
+    "Instalments/penalties: {a} added, {s} already present, {b} invalid rows skipped.":
+        "किस्तें/जुर्माना: {a} जुड़े, {s} पहले से मौजूद थे, {b} गलत पंक्तियाँ छोड़ी गईं।",
+    # admin panel
+    "All transactions and editing of older records": "सभी लेन-देन और पुराने रिकॉर्ड में बदलाव",
+    "Editing old records is protected. Enter the edit password to continue.":
+        "पुराने रिकॉर्ड में बदलाव सुरक्षित है। आगे बढ़ने के लिए एडिट पासवर्ड डालें।",
+    "Edit password": "एडिट पासवर्ड",
+    "Unlock editing": "बदलाव खोलें",
+    "Admin panel is unlocked for this session.": "इस सत्र के लिए एडमिन पैनल खुला है।",
+    "Transactions": "लेन-देन",
+    "Edit records": "रिकॉर्ड बदलें",
+    "Record type": "रिकॉर्ड का प्रकार",
+    "Instalment / penalty payments": "किस्त / जुर्माना भुगतान",
+    "Delete this record": "यह रिकॉर्ड हटाएँ",
+    "Yes, delete this record permanently": "हाँ, यह रिकॉर्ड हमेशा के लिए हटाएँ",
+    "Record deleted.": "रिकॉर्ड हटा दिया गया।",
+    "No lending or borrowing entries yet.": "अभी कोई उधार लेन-देन एंट्री नहीं है।",
+    "Select entry": "एंट्री चुनें",
+    "Party name (change it to move this entry to another party)": "पार्टी का नाम (इसे बदलकर एंट्री दूसरी पार्टी में ले जा सकते हैं)",
+    "This party's phone number. Changing it here updates the party's number. If you move this entry to another saved party, that party's saved number is used.":
+        "इस पार्टी का फ़ोन नंबर। यहाँ बदलने पर पार्टी का नंबर अपडेट हो जाएगा। अगर एंट्री किसी दूसरी सेव पार्टी में ले जाएँ तो उसी पार्टी का सेव किया नंबर इस्तेमाल होगा।",
+    "Party name cannot be empty.": "पार्टी का नाम खाली नहीं हो सकता।",
+    "Entry updated.": "एंट्री अपडेट हो गई।",
+    "No income entries yet.": "अभी कोई आय एंट्री नहीं है।",
+    "Select income entry": "आय एंट्री चुनें",
+    "Income entry updated.": "आय एंट्री अपडेट हो गई।",
+    "Instalments due {a} + penalty due {b} = total outstanding {c}": "बकाया किस्तें {a} + बकाया जुर्माना {b} = कुल बकाया {c}",
+    "Penalty accrued so far {d}, penalty paid {e}.": "अब तक का जुर्माना {d}, चुकाया गया जुर्माना {e}।",
+    "No expense entries yet.": "अभी कोई खर्च एंट्री नहीं है।",
+    "Select expense entry": "खर्च एंट्री चुनें",
+    "Place cannot be empty.": "जगह खाली नहीं हो सकती।",
+    "Expense updated.": "खर्च अपडेट हो गया।",
+    "No loans yet.": "अभी कोई लोन नहीं है।",
+    "Select loan": "लोन चुनें",
+    "Penalty type": "जुर्माने का प्रकार",
+    "Penalty amount / %": "जुर्माने की राशि / %",
+    "Another loan already has this name.": "किसी दूसरे लोन का यही नाम है।",
+    "Loan updated.": "लोन अपडेट हो गया।",
+    "Deleting a loan also deletes all its instalment and penalty payments.": "लोन हटाने पर उसकी सभी किस्तें और जुर्माना भुगतान भी हट जाएँगे।",
+    "No instalment or penalty payments yet.": "अभी कोई किस्त या जुर्माना भुगतान नहीं है।",
+    "Select payment": "भुगतान चुनें",
+    "Payment updated.": "भुगतान अपडेट हो गया।",
+    "Show": "दिखाएँ",
+    "Search party, loan or note": "पार्टी, लोन या नोट खोजें",
+    "Party / loan": "पार्टी / लोन",
+    "No transactions yet.": "अभी कोई लेन-देन नहीं है।",
+    "Money in": "आया हुआ पैसा",
+    "Money out": "गया हुआ पैसा",
+    "in − out": "आया − गया",
+    "To correct or delete an entry, open 'Edit records' above.": "किसी एंट्री को सुधारने या हटाने के लिए ऊपर 'रिकॉर्ड बदलें' खोलें।",
+    "{p} parties, {n} entries": "{p} पार्टियाँ, {n} एंट्रियाँ",
+}
+
+HI_MONTHS = {
+    "January": "जनवरी", "February": "फ़रवरी", "March": "मार्च", "April": "अप्रैल",
+    "May": "मई", "June": "जून", "July": "जुलाई", "August": "अगस्त",
+    "September": "सितंबर", "October": "अक्टूबर", "November": "नवंबर", "December": "दिसंबर",
+    "Jan": "जन", "Feb": "फ़र", "Mar": "मार्च", "Apr": "अप्रै", "Jun": "जून",
+    "Jul": "जुल", "Aug": "अग", "Sep": "सित", "Oct": "अक्टू", "Nov": "नव", "Dec": "दिस",
+}
+_MONTH_RE = re.compile(r"\b(" + "|".join(sorted(HI_MONTHS, key=len, reverse=True)) + r")\b")
+
+
+def lang():
+    code = st.session_state.get("lang", "en")
+    return code if code in LANGS else "en"
+
+
+def t(s):
+    """Translate a UI string. Unknown strings (names, numbers, user data) pass through unchanged."""
+    if not isinstance(s, str):
+        return s
+    if lang() == "hi":
+        return HI.get(s, s)
+    return EN_FIX.get(s, s)
+
+
+def tf(template, **kw):
+    """Translate a template that has {placeholders}, then fill the values in."""
+    return t(template).format(**kw)
+
+
+def fdate(d, fmt="%d %b %Y"):
+    out = d.strftime(fmt)
+    if lang() == "hi":
+        out = _MONTH_RE.sub(lambda m: HI_MONTHS[m.group(1)], out)
+    return out
+
+
+def show_df(df, column_config=None, **kw):
+    """st.dataframe with translated column names and translated text cells."""
+    df = df.copy()
+    for c in df.columns:
+        if not pd.api.types.is_numeric_dtype(df[c]):
+            df[c] = df[c].map(lambda v: t(v) if isinstance(v, str) else v)
+    df = df.rename(columns=lambda c: t(c) if isinstance(c, str) else c)
+    if column_config:
+        column_config = {(t(k) if isinstance(k, str) else k): v for k, v in column_config.items()}
+    st.dataframe(df, column_config=column_config, **kw)
+
+
+def get_setting(key, default=""):
+    row = query_df("SELECT value FROM settings WHERE key = ?", (key,))
+    return row.iloc[0]["value"] if not row.empty else default
+
+
+def set_setting(key, value):
+    run(
+        "INSERT INTO settings(key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+
+
+def load_language():
+    if "lang" not in st.session_state:
+        saved = get_setting("lang", "en")
+        st.session_state["lang"] = saved if saved in LANGS else "en"
+
+
+def language_picker():
+    """English / Hindi switch. The choice is saved, so it applies to the whole app."""
+    codes = list(LANGS)
+    cur = lang()
+    pick = st.radio(
+        "Language / भाषा", codes, index=codes.index(cur),
+        format_func=LANGS.get, horizontal=True, key="lang_pick",
+    )
+    if pick != cur:
+        st.session_state["lang"] = pick
+        set_setting("lang", pick)
+        st.rerun()
+
 
 st.set_page_config(page_title="Udhari Khata", page_icon="📒", layout="wide")
 
@@ -171,6 +589,7 @@ def status_of(b):
 
 
 def kpi(label, value, sub, cls):
+    label, sub = t(label), t(sub)
     return (
         f'<div class="kpi {cls}"><div class="lbl">{label}</div>'
         f'<div class="val">{value}</div><div class="sub">{sub}</div></div>'
@@ -178,6 +597,7 @@ def kpi(label, value, sub, cls):
 
 
 def hero(title, subtitle):
+    title, subtitle = t(title), t(subtitle)
     st.markdown(
         f'<div class="hero"><h1>{title}</h1><p>{subtitle}</p></div>', unsafe_allow_html=True
     )
@@ -223,6 +643,10 @@ def init_db():
                 amount REAL NOT NULL CHECK(amount > 0),
                 source TEXT DEFAULT '',
                 note TEXT DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS settings(
+                key TEXT PRIMARY KEY,
+                value TEXT
             );
             CREATE TABLE IF NOT EXISTS expenses(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -407,14 +831,14 @@ def check_password():
     with mid:
         hero("Udhari Khata", "Sign in to access your ledger.")
         with st.form("login"):
-            entered = st.text_input("Password", type="password")
-            ok = st.form_submit_button("Sign in", use_container_width=True, type="primary")
+            entered = st.text_input(t("Password"), type="password")
+            ok = st.form_submit_button(t("Sign in"), use_container_width=True, type="primary")
         if ok:
             if hmac.compare_digest(entered.encode(), str(pw).encode()):
                 st.session_state["logged_in"] = True
                 st.rerun()
             else:
-                st.error("Incorrect password.")
+                st.error(t("Incorrect password."))
     return False
 
 
@@ -428,18 +852,20 @@ def go(page, party=None):
 # ---------------------------------------------------------------- pages
 def party_card(r, key):
     cls, label = status_of(r["balance"])
-    last = f"last entry {r['last']}" if r["last"] else "no entries yet"
+    cls, label = cls, t(label)
+    last = tf("last entry {d}", d=r["last"]) if r["last"] else t("no entries yet")
+    meta = tf("{n} entries, {last}", n=r["entries"], last=last)
     with st.container(border=True):
         st.markdown(
             f'<div class="pcard-top">{avatar(r["name"])}<div>'
             f'<div class="pname">{escape(r["name"])}</div>'
-            f'<div class="pmeta">{r["entries"]} entries, {last}</div></div></div>'
+            f'<div class="pmeta">{meta}</div></div></div>'
             f'<div class="pamt {"pos" if cls == "g" else "neg" if cls == "r" else ""}">'
             f'{inr(abs(r["balance"]))}</div><span class="chip {cls}">{label}</span>',
             unsafe_allow_html=True,
         )
         st.button(
-            "Add entry", key=key, use_container_width=True,
+            t("Add entry"), key=key, use_container_width=True,
             on_click=go, args=(P_NEW, r["name"]),
         )
 
@@ -455,11 +881,11 @@ def cash_flow():
     inc = income_df()
     if not inc.empty:
         parts.append(pd.DataFrame({"month": inc["month"], "Income": inc["amount"]}))
-    t = txns_df()
-    if not t.empty:
-        amt, kind = t["amount"], t["kind"]
+    tx = txns_df()
+    if not tx.empty:
+        amt, kind = tx["amount"], tx["kind"]
         parts.append(pd.DataFrame({
-            "month": t["date"].str[:7],
+            "month": tx["date"].str[:7],
             "Udhar diya": amt.where(kind == "Money lent", 0.0),
             "Udhar wapas diya": amt.where(kind == "Repayment made", 0.0),
             "Wapas mile": amt.where(kind == "Repayment received", 0.0),
@@ -490,7 +916,7 @@ def cash_total():
 
 
 def show_cash_left():
-    st.caption(f"Net cash position: {inr(cash_total())}")
+    st.caption(tf("Net cash position: {v}", v=inr(cash_total())))
 
 
 def cash_section():
@@ -501,25 +927,25 @@ def cash_section():
     gaya = float(cf["Gaya"].sum())
     other_in = float((cf["Wapas mile"] + cf["Udhar liya"]).sum())
     bacha = float(cf["Bacha"].sum())
-    st.subheader("Cash flow")
+    st.subheader(t("Cash flow"))
     k1, k2, k3 = st.columns(3)
     k1.markdown(kpi("Total income", inr(income), "to date", "g"), unsafe_allow_html=True)
     k2.markdown(
-        kpi("Total outflow", inr(gaya), "lent, repaid, instalments, penalties, kharcha", "r"),
+        kpi("Total outflow", inr(gaya), "lent, repaid, instalments, penalties, expenses", "r"),
         unsafe_allow_html=True,
     )
     k3.markdown(
-        kpi("Net cash position", inr(bacha), f"income + {inr(other_in)} other inflow − outflow",
+        kpi("Net cash position", inr(bacha), tf("income + {v} other inflow − outflow", v=inr(other_in)),
             "g" if bacha >= 0 else "r"),
         unsafe_allow_html=True,
     )
-    st.caption(
-        f"Outflow: lent {inr(cf['Udhar diya'].sum())}, repaid {inr(cf['Udhar wapas diya'].sum())}, "
-        f"instalments {inr(cf['Kist'].sum())}, penalties {inr(cf['Penalty'].sum())}, "
-        f"kharcha {inr(cf['Kharcha'].sum())}. "
-        f"Other inflow: repayments received {inr(cf['Wapas mile'].sum())}, borrowed {inr(cf['Udhar liya'].sum())}."
-    )
-    with st.expander("Monthly breakdown"):
+    st.caption(tf(
+        "Outflow: lent {a}, repaid {b}, instalments {c}, penalties {d}, expenses {e}. Other inflow: repayments received {f}, borrowed {g}.",
+        a=inr(cf['Udhar diya'].sum()), b=inr(cf['Udhar wapas diya'].sum()),
+        c=inr(cf['Kist'].sum()), d=inr(cf['Penalty'].sum()), e=inr(cf['Kharcha'].sum()),
+        f=inr(cf['Wapas mile'].sum()), g=inr(cf['Udhar liya'].sum()),
+    ))
+    with st.expander(t("Monthly breakdown")):
         tbl = pd.DataFrame({
             "Income": cf["Income"],
             "Other inflow": cf["Wapas mile"] + cf["Udhar liya"],
@@ -528,7 +954,7 @@ def cash_section():
             "Cumulative": cf["Bacha"].cumsum(),
         }).iloc[::-1].reset_index().rename(columns={"month": "Month"})
         money = st.column_config.NumberColumn(format="₹%.2f")
-        st.dataframe(
+        show_df(
             tbl, hide_index=True, use_container_width=True,
             column_config={c: money for c in ["Income", "Other inflow", "Outflow", "Net", "Cumulative"]},
         )
@@ -539,12 +965,12 @@ def expense_section():
     ex = expenses_df()
     if ex.empty:
         return
-    st.subheader("Kharcha: paisa kaha kaha gaya")
+    st.subheader(t("Expenses: where the money went"))
     months = sorted(ex["month"].unique(), reverse=True)
-    pick = st.selectbox("Period", ["All time"] + months, key="exp_period")
+    pick = st.selectbox(t("Period"), ["All time"] + months, key="exp_period", format_func=t)
     v = ex if pick == "All time" else ex[ex["month"] == pick]
     if v.empty:
-        st.info("No kharcha in this period.")
+        st.info(t("No expenses in this period."))
         return
     v = v.assign(place_key=v["place"].str.strip().str.lower())
     by_place = (
@@ -559,8 +985,8 @@ def expense_section():
     by_cat.columns = ["Category", "Total"]
 
     k1, k2, k3 = st.columns(3)
-    k1.markdown(kpi("Total kharcha", inr(total), f"{len(v)} entries", "r"), unsafe_allow_html=True)
-    k2.markdown(kpi("Sabse zyada", inr(by_place.iloc[0]["Total"]), str(by_place.iloc[0]["Place"]), "r"),
+    k1.markdown(kpi("Total expenses", inr(total), tf("{n} entries", n=len(v)), "r"), unsafe_allow_html=True)
+    k2.markdown(kpi("Biggest spend", inr(by_place.iloc[0]["Total"]), str(by_place.iloc[0]["Place"]), "r"),
                 unsafe_allow_html=True)
     k3.markdown(kpi("Top category", inr(by_cat.iloc[0]["Total"]), str(by_cat.iloc[0]["Category"]), "b"),
                 unsafe_allow_html=True)
@@ -568,34 +994,36 @@ def expense_section():
 
     l, r = st.columns([1.35, 1])
     with l:
-        st.markdown("**Kahan kitna gaya**")
+        st.markdown(t("**Spent where**"))
         top = by_place.head(10)
         chart = (
             alt.Chart(top)
             .mark_bar(cornerRadiusEnd=2, size=18, color=RED)
             .encode(
                 y=alt.Y("Place:N", sort="-x", title=None),
-                x=alt.X("Total:Q", title="Amount (₹)"),
-                tooltip=["Place", "Category", "Entries", alt.Tooltip("Total:Q", format=",.2f")],
+                x=alt.X("Total:Q", title=t("Amount (₹)")),
+                tooltip=[alt.Tooltip("Place", title=t("Place")), alt.Tooltip("Category", title=t("Category")),
+                         alt.Tooltip("Entries", title=t("Entries")),
+                         alt.Tooltip("Total:Q", title=t("Total"), format=",.2f")],
             )
             .properties(height=max(120, 32 * len(top)))
         )
         st.altair_chart(chart, use_container_width=True)
     with r:
-        st.markdown("**Category-wise**")
-        st.dataframe(
+        st.markdown(t("**Category-wise**"))
+        show_df(
             by_cat, hide_index=True, use_container_width=True,
             column_config={"Total": st.column_config.NumberColumn(format="₹%.2f")},
         )
 
-    with st.expander("Place-wise full list"):
-        st.dataframe(
+    with st.expander(t("Place-wise full list")):
+        show_df(
             by_place[["Place", "Category", "Entries", "Total", "Share %", "Last"]],
             hide_index=True, use_container_width=True,
             column_config={"Total": st.column_config.NumberColumn(format="₹%.2f")},
         )
-    with st.expander("All kharcha entries"):
-        st.dataframe(
+    with st.expander(t("All expense entries")):
+        show_df(
             v.sort_values(["date", "id"], ascending=False)[["date", "place", "category", "amount", "note"]]
             .rename(columns={"date": "Date", "place": "Place", "category": "Category",
                              "amount": "Amount", "note": "Note"}),
@@ -615,14 +1043,14 @@ def loan_section():
         (l, loan_summary(l, pays[pays["loan_id"] == l["id"]], today))
         for l in loans.to_dict("records")
     ]
-    st.subheader("Loans and instalments")
+    st.subheader(t("Loans and instalments"))
     pending = sum(i["pending"] for _, i in items)
     pen_due = sum(i["pen_due"] for _, i in items)
     n_late = sum(len(i["overdue"]) for _, i in items)
     k1, k2, k3 = st.columns(3)
     k1.markdown(
         kpi("Loan outstanding", inr(pending + pen_due),
-            f"instalments {inr(pending)} + penalty {inr(pen_due)}", "b"),
+            tf("instalments {a} + penalty {b}", a=inr(pending), b=inr(pen_due)), "b"),
         unsafe_allow_html=True,
     )
     k2.markdown(
@@ -639,37 +1067,41 @@ def loan_section():
         for col, (l, i) in zip(cols, items[start:start + 3]):
             with col, st.container(border=True):
                 if i["overdue"]:
-                    cls, label = "r", f"{len(i['overdue'])} overdue"
+                    cls, label = "r", tf("{n} overdue", n=len(i['overdue']))
                 elif i["pending"] <= 0.005 and i["pen_due"] > 0.005:
-                    cls, label = "r", "Penalty due"
+                    cls, label = "r", t("Penalty due")
                 elif i["pending"] <= 0.005:
-                    cls, label = "g", "Fully paid"
+                    cls, label = "g", t("Fully paid")
                 else:
-                    cls, label = "g", "On schedule"
+                    cls, label = "g", t("On schedule")
                 nxt = i["next"]
-                nxt_txt = f"next due {nxt['due'].strftime('%d %b %Y')}" if nxt else "all instalments paid"
+                nxt_txt = tf("next due {d}", d=fdate(nxt['due'])) if nxt else t("all instalments paid")
+                meta_a = tf("{k} × {n} instalments, {nxt}", k=inr(l["kist_amount"]),
+                            n=int(l["total_kists"]), nxt=nxt_txt)
+                meta_b = tf("{a} of {b} instalments paid", a=i["paid_cnt"], b=int(l["total_kists"]))
+                out_lbl = t("Outstanding (incl. penalty)")
                 st.markdown(
                     f'<div class="pcard-top">{avatar(l["name"])}<div>'
                     f'<div class="pname">{escape(l["name"])}</div>'
-                    f'<div class="pmeta">{inr(l["kist_amount"])} × {int(l["total_kists"])} instalments, {nxt_txt}</div>'
+                    f'<div class="pmeta">{meta_a}</div>'
                     f'</div></div>'
-                    f'<div class="pmeta" style="margin-top:8px">Outstanding (incl. penalty)</div>'
+                    f'<div class="pmeta" style="margin-top:8px">{out_lbl}</div>'
                     f'<div class="pamt" style="margin-top:0">{inr(i["pending"] + i["pen_due"])}</div>'
                     f'<span class="chip {cls}">{label}</span>'
-                    f'<div class="pmeta" style="margin-top:6px">{i["paid_cnt"]} of {int(l["total_kists"])} instalments paid</div>',
+                    f'<div class="pmeta" style="margin-top:6px">{meta_b}</div>',
                     unsafe_allow_html=True,
                 )
                 if i["pen_due"] > 0.005:
                     st.markdown(
                         f'<div class="neg" style="font-weight:700;font-size:.85rem">'
-                        f'Penalty due: {inr(i["pen_due"])}</div>',
+                        f'{tf("Penalty due: {v}", v=inr(i["pen_due"]))}</div>',
                         unsafe_allow_html=True,
                     )
                 st.caption(
-                    f"Instalments due {inr(i['pending'])} + penalty {inr(i['pen_due'])}"
+                    tf("Instalments due {a} + penalty {b}", a=inr(i['pending']), b=inr(i['pen_due']))
                 )
                 st.progress(min(i["paid"] / i["total"], 1.0) if i["total"] else 0.0)
-                with st.expander("Instalment schedule"):
+                with st.expander(t("Instalment schedule")):
                     tbl = pd.DataFrame([
                         {
                             "No.": r["no"],
@@ -680,19 +1112,19 @@ def loan_section():
                         }
                         for r in i["rows"]
                     ])
-                    st.dataframe(
+                    show_df(
                         tbl, hide_index=True, use_container_width=True,
                         column_config={"Penalty": st.column_config.NumberColumn(format="₹%.2f")},
                     )
 
 
 def page_dashboard():
-    hero("Dashboard", f"Your financial position as of {date.today().strftime('%d %b %Y')}")
+    hero("Dashboard", tf("Your financial position as of {d}", d=fdate(date.today())))
     df = txns_df()
     inc = income_df()
     if df.empty and inc.empty and loans_df().empty and expenses_df().empty:
-        st.info("No records yet. Add your first entry to get started.")
-        st.button("Add first entry", on_click=go, args=(P_NEW,), type="primary")
+        st.info(t("No records yet. Add your first entry to get started."))
+        st.button(t("Add first entry"), on_click=go, args=(P_NEW,), type="primary")
         return
 
     s = summary_df()
@@ -703,13 +1135,13 @@ def page_dashboard():
 
     this_month = inc.loc[inc["month"] == date.today().strftime("%Y-%m"), "amount"].sum()
     c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(kpi("Receivable", inr(milna), f"from {n_mil} parties", "g"), unsafe_allow_html=True)
-    c2.markdown(kpi("Payable", inr(dena), f"to {n_den} parties", "r"), unsafe_allow_html=True)
+    c1.markdown(kpi("Receivable", inr(milna), tf("from {n} parties", n=n_mil), "g"), unsafe_allow_html=True)
+    c2.markdown(kpi("Payable", inr(dena), tf("to {n} parties", n=n_den), "r"), unsafe_allow_html=True)
     c3.markdown(
         kpi("Net balance", inr(milna - dena), "receivable − payable", "b"), unsafe_allow_html=True
     )
     c4.markdown(
-        kpi("Income this month", inr(this_month), date.today().strftime("%B %Y"), "g"),
+        kpi("Income this month", inr(this_month), fdate(date.today(), "%B %Y"), "g"),
         unsafe_allow_html=True,
     )
     st.write("")
@@ -720,65 +1152,65 @@ def page_dashboard():
 
     left, right = st.columns([1.35, 1])
     with left:
-        st.subheader("Largest balances")
+        st.subheader(t("Largest balances"))
         top = s[s["balance"] != 0].copy()
         top["Amount"] = top["balance"].abs()
-        rec_l, pay_l = "Receivable", "Payable"
+        rec_l, pay_l = t("Receivable"), t("Payable")
         top["Status"] = top["balance"].apply(lambda b: rec_l if b > 0 else pay_l)
         top = top.sort_values("Amount", ascending=False).head(8)
         if top.empty:
-            st.success("All balances are settled.")
+            st.success(t("All balances are settled."))
         else:
             chart = (
                 alt.Chart(top)
                 .mark_bar(cornerRadiusEnd=2, size=20)
                 .encode(
                     y=alt.Y("name:N", sort="-x", title=None),
-                    x=alt.X("Amount:Q", title="Amount (₹)"),
+                    x=alt.X("Amount:Q", title=t("Amount (₹)")),
                     color=alt.Color(
                         "Status:N",
                         scale=alt.Scale(domain=[rec_l, pay_l], range=[GREEN, RED]),
                         legend=alt.Legend(orient="bottom", title=None),
                     ),
-                    tooltip=[alt.Tooltip("name:N", title="Name"), "Status:N",
+                    tooltip=[alt.Tooltip("name:N", title=t("Name")), alt.Tooltip("Status:N", title=t("Status")),
                              alt.Tooltip("Amount:Q", format=",.2f")],
                 )
                 .properties(height=max(120, 38 * len(top)))
             )
             st.altair_chart(chart, use_container_width=True)
     with right:
-        st.subheader("Recent activity")
+        st.subheader(t("Recent activity"))
         for _, r in df.sort_values(["date", "id"], ascending=False).head(6).iterrows():
             pos = r["signed"] > 0
             st.markdown(
                 f'<div class="act"><div><div class="l">{escape(r["party"])}</div>'
-                f'<div class="s">{escape(r["kind"])}, {r["date"]}</div></div>'
+                f'<div class="s">{escape(t(r["kind"]))}, {r["date"]}</div></div>'
                 f'<div class="a {"pos" if pos else "neg"}">{"+" if pos else "−"}{inr(r["amount"])}</div></div>',
                 unsafe_allow_html=True,
             )
 
     if not inc.empty:
-        st.subheader("Monthly income")
+        st.subheader(t("Monthly income"))
         monthly = inc.groupby("month")["amount"].sum().reset_index().tail(12)
         ichart = (
             alt.Chart(monthly)
             .mark_bar(cornerRadiusEnd=2, color=GREEN)
             .encode(
                 x=alt.X("month:N", title=None, sort=None),
-                y=alt.Y("amount:Q", title="Amount (₹)"),
-                tooltip=[alt.Tooltip("month:N", title="Month"),
-                         alt.Tooltip("amount:Q", title="Income", format=",.2f")],
+                y=alt.Y("amount:Q", title=t("Amount (₹)")),
+                tooltip=[alt.Tooltip("month:N", title=t("Month")),
+                         alt.Tooltip("amount:Q", title=t("Income"), format=",.2f")],
             )
             .properties(height=220)
         )
         st.altair_chart(ichart, use_container_width=True)
-        st.caption(f"Total income to date: {inr(inc['amount'].sum())} across {len(inc)} entries")
+        st.caption(tf("Total income to date: {a} across {n} entries", a=inr(inc['amount'].sum()), n=len(inc)))
 
-    st.subheader("All parties")
+    st.subheader(t("All parties"))
     f1, f2 = st.columns([2, 1])
-    q = f1.text_input("Search by name", placeholder="Search by name", label_visibility="collapsed")
-    flt = f2.selectbox("Filter", ["All", "Receivable", "Payable", "Settled"],
-                       label_visibility="collapsed")
+    q = f1.text_input(t("Search by name"), placeholder=t("Search by name"), label_visibility="collapsed")
+    flt = f2.selectbox(t("Filter"), ["All", "Receivable", "Payable", "Settled"],
+                       format_func=t, label_visibility="collapsed")
     v = s.copy()
     if q.strip():
         v = v[v["name"].str.contains(q.strip(), case=False, regex=False)]
@@ -790,7 +1222,7 @@ def page_dashboard():
         v = v[v["balance"] == 0]
     v = v.reindex(v["balance"].abs().sort_values(ascending=False).index)
     if v.empty:
-        st.caption("No matching parties.")
+        st.caption(t("No matching parties."))
     rows = list(v.iterrows())
     for i in range(0, len(rows), 3):
         cols = st.columns(3)
@@ -801,102 +1233,102 @@ def page_dashboard():
 
 def income_form():
     # form ke bahar, taaki 'Other' chunte hi neeche naam likhne ka box turant aa jaye
-    source = st.selectbox("Source", INCOME_SOURCES, key="inc_source")
+    source = st.selectbox(t("Source"), INCOME_SOURCES, key="inc_source", format_func=t)
     other = ""
     if source == "Other":
-        other = st.text_input("Specify source", placeholder="e.g. Tuition, Freelance", key="inc_other")
+        other = st.text_input(t("Specify source"), placeholder=t("e.g. Tuition, Freelance"), key="inc_other")
     with st.form("income_form", clear_on_submit=True):
         a, b = st.columns(2)
-        amount = a.number_input("Amount (₹)", min_value=0.0, step=500.0, format="%.2f")
-        idate = b.date_input("Date received", value=date.today())
-        note = st.text_input("Note (optional)", placeholder="e.g. overtime, commission")
-        ok = st.form_submit_button("Save income", type="primary", use_container_width=True)
+        amount = a.number_input(t("Amount (₹)"), min_value=0.0, step=500.0, format="%.2f")
+        idate = b.date_input(t("Date received"), value=date.today())
+        note = st.text_input(t("Note (optional)"), placeholder=t("e.g. overtime, commission"))
+        ok = st.form_submit_button(t("Save income"), type="primary", use_container_width=True)
     if ok:
         final_source = other.strip() if source == "Other" else source
         if amount <= 0:
-            st.error("Amount must be greater than 0.")
+            st.error(t("Amount must be greater than 0."))
         elif not final_source:
-            st.error("Specify the source when 'Other' is selected.")
+            st.error(t("Specify the source when 'Other' is selected."))
         else:
             run(
                 "INSERT INTO income(idate, amount, source, note) VALUES (?,?,?,?)",
                 (idate.isoformat(), float(amount), final_source, note.strip()),
             )
-            st.success(f"Income of {inr(amount)} saved.")
-            st.toast("Income saved")
+            st.success(tf("Income of {a} saved.", a=inr(amount)))
+            st.toast(t("Income saved"))
             show_cash_left()
 
 
 def expense_form():
     # form ke bahar, taaki 'Other' chunte hi naam likhne ka box turant aa jaye
-    cat = st.selectbox("Category", EXPENSE_CATS, key="exp_cat")
+    cat = st.selectbox(t("Category"), EXPENSE_CATS, key="exp_cat", format_func=t)
     other = ""
     if cat == "Other":
-        other = st.text_input("Specify category", placeholder="e.g. Gift, Repair", key="exp_other")
+        other = st.text_input(t("Specify category"), placeholder=t("e.g. Gift, Repair"), key="exp_other")
     known = expenses_df()["place"].str.strip()
     known = sorted({p for p in known if p}, key=str.lower)
     with st.form("expense_form", clear_on_submit=True):
-        place = st.text_input("Kahan kharch kiya", placeholder="e.g. Big Bazaar, Petrol pump, Medical store")
+        place = st.text_input(t("Where was it spent?"), placeholder=t("e.g. Big Bazaar, Petrol pump, Medical store"))
         a, b = st.columns(2)
-        amount = a.number_input("Amount (₹)", min_value=0.0, step=100.0, format="%.2f")
-        edate = b.date_input("Date", value=date.today())
-        note = st.text_input("Note (optional)", placeholder="e.g. monthly ration, bike petrol")
-        ok = st.form_submit_button("Save kharcha", type="primary", use_container_width=True)
+        amount = a.number_input(t("Amount (₹)"), min_value=0.0, step=100.0, format="%.2f")
+        edate = b.date_input(t("Date"), value=date.today())
+        note = st.text_input(t("Note (optional)"), placeholder=t("e.g. monthly ration, bike petrol"))
+        ok = st.form_submit_button(t("Save expense"), type="primary", use_container_width=True)
     if known:
-        st.caption("Pehle ke places: " + ", ".join(known[:12]))
+        st.caption(t("Previous places: ") + ", ".join(known[:12]))
     if ok:
         final_cat = other.strip() if cat == "Other" else cat
         if not place.strip():
-            st.error("Enter where the money was spent.")
+            st.error(t("Enter where the money was spent."))
         elif amount <= 0:
-            st.error("Amount must be greater than 0.")
+            st.error(t("Amount must be greater than 0."))
         elif not final_cat:
-            st.error("Specify the category when 'Other' is selected.")
+            st.error(t("Specify the category when 'Other' is selected."))
         else:
             run(
                 "INSERT INTO expenses(edate, amount, place, category, note) VALUES (?,?,?,?,?)",
                 (edate.isoformat(), float(amount), place.strip(), final_cat, note.strip()),
             )
-            st.success(f"Kharcha of {inr(amount)} at {place.strip()} saved.")
-            st.toast("Kharcha saved")
+            st.success(tf("Expense of {a} at {p} saved.", a=inr(amount), p=place.strip()))
+            st.toast(t("Expense saved"))
             show_cash_left()
 
 
 def loan_entry_form():
     mode = st.radio(
-        "Action", ["Add new loan", "Record payment"],
-        horizontal=True, key="loan_mode",
+        t("Action"), ["Add new loan", "Record payment"],
+        horizontal=True, key="loan_mode", format_func=t,
     )
     if mode == "Add new loan":
         # form ke bahar, taaki bayaj ka label turant badle
         ptype = st.radio(
-            "How is penalty charged on late instalments?", list(LOAN_PEN_TYPES.values()),
-            horizontal=True, key="loan_pen_type",
+            t("How is penalty charged on late instalments?"), list(LOAN_PEN_TYPES.values()),
+            horizontal=True, key="loan_pen_type", format_func=t,
         )
         pkey = next(k for k, v in LOAN_PEN_TYPES.items() if v == ptype)
         with st.form("loan_new", clear_on_submit=True):
-            name = st.text_input("Loan name", placeholder="e.g. Bank loan, Personal loan from Ramesh")
+            name = st.text_input(t("Loan name"), placeholder=t("e.g. Bank loan, Personal loan from Ramesh"))
             a, b, c = st.columns(3)
-            loan_amount = a.number_input("Loan amount (₹, optional)", min_value=0.0, step=1000.0, format="%.2f")
-            kist = b.number_input("Instalment amount (₹)", min_value=0.0, step=100.0, format="%.2f")
-            n = c.number_input("Number of instalments", min_value=1, value=12, step=1)
+            loan_amount = a.number_input(t("Loan amount (₹, optional)"), min_value=0.0, step=1000.0, format="%.2f")
+            kist = b.number_input(t("Instalment amount (₹)"), min_value=0.0, step=100.0, format="%.2f")
+            n = c.number_input(t("Number of instalments"), min_value=1, value=12, step=1)
             d, e = st.columns(2)
             pen = d.number_input(
-                {"daily": "Penalty (₹ per day)",
-                 "pct": "Interest (% per month)"}.get(pkey, "Penalty (₹ per late instalment)"),
+                t({"daily": "Penalty (₹ per day)",
+                   "pct": "Interest (% per month)"}.get(pkey, "Penalty (₹ per late instalment)")),
                 min_value=0.0, step=0.5 if pkey == "pct" else 10.0, format="%.2f",
             )
-            first = e.date_input("First due date", value=date.today())
-            note = st.text_input("Note (optional)", placeholder="e.g. vehicle loan, due on the 5th")
-            ok = st.form_submit_button("Save loan", type="primary", use_container_width=True)
+            first = e.date_input(t("First due date"), value=date.today())
+            note = st.text_input(t("Note (optional)"), placeholder=t("e.g. vehicle loan, due on the 5th"))
+            ok = st.form_submit_button(t("Save loan"), type="primary", use_container_width=True)
         if ok:
             name = name.strip()
             if not name:
-                st.error("Enter a loan name.")
+                st.error(t("Enter a loan name."))
             elif kist <= 0:
-                st.error("Instalment amount must be greater than 0.")
+                st.error(t("Instalment amount must be greater than 0."))
             elif not query_df("SELECT 1 FROM loans WHERE name = ? COLLATE NOCASE", (name,)).empty:
-                st.error("A loan with this name already exists. Use a different name.")
+                st.error(t("A loan with this name already exists. Use a different name."))
             else:
                 run(
                     "INSERT INTO loans(name, loan_amount, kist_amount, total_kists, first_due, "
@@ -905,55 +1337,57 @@ def loan_entry_form():
                      pkey, float(pen), note.strip()),
                 )
                 st.success(
-                    f"Loan '{name}' saved: {int(n)} instalments × {inr(kist)} = {inr(kist * n)}."
+                    tf("Loan '{name}' saved: {n} instalments × {k} = {tot}.",
+                       name=name, n=int(n), k=inr(kist), tot=inr(kist * n))
                 )
-                st.toast("Loan saved")
+                st.toast(t("Loan saved"))
         return
 
     loans = loans_df()
     if loans.empty:
-        st.info("Add a loan first, using 'Add new loan'.")
+        st.info(t("Add a loan first, using 'Add new loan'."))
         return
-    pick = st.selectbox("Loan", loans["name"].tolist(), key="loan_pick")
+    pick = st.selectbox(t("Loan"), loans["name"].tolist(), key="loan_pick")
     l = loans[loans["name"] == pick].iloc[0].to_dict()
     pays = loan_pay_df()
     inf = loan_summary(l, pays[pays["loan_id"] == l["id"]], date.today())
     nxt = inf["next"]
     st.caption(
-        f"Instalments due: {inr(inf['pending'])}, penalty due: {inr(inf['pen_due'])}"
-        + (f", next due {nxt['due'].strftime('%d %b %Y')}" if nxt else ", all instalments paid")
+        tf("Instalments due: {a}, penalty due: {b}", a=inr(inf['pending']), b=inr(inf['pen_due']))
+        + (tf(", next due {d}", d=fdate(nxt['due'])) if nxt else t(", all instalments paid"))
     )
     if inf["overdue"]:
-        st.warning(f"{len(inf['overdue'])} instalment(s) overdue. Penalty accrued to date: {inr(inf['pen_total'])}")
+        st.warning(tf("{n} instalment(s) overdue. Penalty accrued to date: {p}",
+                      n=len(inf['overdue']), p=inr(inf['pen_total'])))
 
     with st.form("loan_pay", clear_on_submit=True):
-        kind = st.radio("Payment type", ["Instalment", "Penalty"], horizontal=True)
+        kind = st.radio(t("Payment type"), ["Instalment", "Penalty"], horizontal=True, format_func=t)
         a, b = st.columns(2)
         amount = a.number_input(
-            "Amount (₹)", min_value=0.0, value=float(l["kist_amount"]), step=100.0,
+            t("Amount (₹)"), min_value=0.0, value=float(l["kist_amount"]), step=100.0,
             format="%.2f", key=f"lp_amt_{l['id']}",
         )
-        pdate = b.date_input("Payment date", value=date.today())
-        note = st.text_input("Note (optional)", placeholder="e.g. online, cash")
-        ok = st.form_submit_button("Save payment", type="primary", use_container_width=True)
+        pdate = b.date_input(t("Payment date"), value=date.today())
+        note = st.text_input(t("Note (optional)"), placeholder=t("e.g. online, cash"))
+        ok = st.form_submit_button(t("Save payment"), type="primary", use_container_width=True)
     if ok:
         if amount <= 0:
-            st.error("Amount must be greater than 0.")
+            st.error(t("Amount must be greater than 0."))
         else:
             run(
                 "INSERT INTO loan_payments(loan_id, pdate, kind, amount, note) VALUES (?,?,?,?,?)",
                 (int(l["id"]), pdate.isoformat(), "kist" if kind == "Instalment" else "penalty", float(amount), note.strip()),
             )
-            st.success(f"{pick}: {kind.lower()} of {inr(amount)} saved.")
-            st.toast("Payment saved")
+            st.success(tf("{loan}: {kind} of {a} saved.", loan=pick, kind=t(kind).lower(), a=inr(amount)))
+            st.toast(t("Payment saved"))
             show_cash_left()
 
 
 def page_new_entry():
     hero("New entry", "Record a transaction, income or loan payment")
     typ = st.radio(
-        "Entry type", ["Lending / borrowing", "Income", "Loan / instalment", "Kharcha (expense)"],
-        horizontal=True, key="entry_type",
+        t("Entry type"), ["Lending / borrowing", "Income", "Loan / instalment", "Expense"],
+        horizontal=True, key="entry_type", format_func=t,
     )
     if typ == "Income":
         income_form()
@@ -961,7 +1395,7 @@ def page_new_entry():
     if typ == "Loan / instalment":
         loan_entry_form()
         return
-    if typ == "Kharcha (expense)":
+    if typ == "Expense":
         expense_form()
         return
     parties = parties_df()
@@ -972,15 +1406,15 @@ def page_new_entry():
     flash = st.session_state.pop("entry_flash", None)
     if flash:
         st.success(flash)
-        st.toast("Entry saved")
+        st.toast(t("Entry saved"))
         show_cash_left()
 
     n = st.session_state.setdefault("entry_n", 0)
 
     # Party + phone form ke bahar hain, taaki party badalte hi saved number turant dikhe
     a, b = st.columns(2)
-    existing = a.selectbox("Existing party", options, index=idx, key=f"ent_party_{n}")
-    new_name = b.text_input("Or new party name", placeholder="e.g. Ramesh Sharma", key=f"ent_new_{n}")
+    existing = a.selectbox(t("Existing party"), options, index=idx, key=f"ent_party_{n}", format_func=t)
+    new_name = b.text_input(t("Or new party name"), placeholder=t("e.g. Ramesh Sharma"), key=f"ent_new_{n}")
     name = new_name.strip() or ("" if existing.startswith("--") else existing)
 
     stored_phone = ""
@@ -992,37 +1426,37 @@ def page_new_entry():
 
     if stored_phone:
         # Party ka number ek baar save ho gaya to hamesha wahi rahega
-        st.text_input("Phone", value=stored_phone, disabled=True,
+        st.text_input(t("Phone"), value=stored_phone, disabled=True,
                       key=f"ent_ph_locked_{n}_{name}",
-                      help="Is party ka saved number, har entry me yahi use hoga.")
+                      help=t("This party's saved number. It is used for every entry."))
         phone = stored_phone
     else:
-        phone = st.text_input("Phone (required)", placeholder="98xxxxxx10",
+        phone = st.text_input(t("Phone (required)"), placeholder=t("98xxxxxx10"),
                               key=f"ent_ph_{n}_{name}")
 
     with st.form("entry_form", clear_on_submit=True):
-        kind = st.radio("Transaction type", list(KINDS.keys()), horizontal=True)
+        kind = st.radio(t("Transaction type"), list(KINDS.keys()), horizontal=True, format_func=t)
         c, d = st.columns(2)
-        amount = c.number_input("Amount (₹)", min_value=0.0, step=100.0, format="%.2f")
-        tdate = d.date_input("Date", value=date.today())
-        note = st.text_input("Note (optional)", placeholder="e.g. shop supplies, wedding expenses")
-        submitted = st.form_submit_button("Save payment", type="primary", use_container_width=True)
+        amount = c.number_input(t("Amount (₹)"), min_value=0.0, step=100.0, format="%.2f")
+        tdate = d.date_input(t("Date"), value=date.today())
+        note = st.text_input(t("Note (optional)"), placeholder=t("e.g. shop supplies, wedding expenses"))
+        submitted = st.form_submit_button(t("Save payment"), type="primary", use_container_width=True)
 
     if submitted:
         digits = "".join(ch for ch in phone if ch.isdigit())
         if not name:
-            st.error("Select or enter a party name.")
+            st.error(t("Select or enter a party name."))
         elif not stored_phone and len(digits) < 10:
-            st.error("Phone number is required (at least 10 digits).")
+            st.error(t("Phone number is required (at least 10 digits)."))
         elif amount <= 0:
-            st.error("Amount must be greater than 0.")
+            st.error(t("Amount must be greater than 0."))
         else:
             pid = get_or_create_party(name, phone)
             run(
                 "INSERT INTO txns(party_id, tdate, kind, amount, note) VALUES (?,?,?,?,?)",
                 (pid, tdate.isoformat(), kind, float(amount), note.strip()),
             )
-            st.session_state["entry_flash"] = f"Entry saved: {inr(amount)} with {name}."
+            st.session_state["entry_flash"] = tf("Entry saved: {a} with {n}.", a=inr(amount), n=name)
             st.session_state["entry_n"] = n + 1  # party/phone fields reset
             st.rerun()
 
@@ -1174,8 +1608,8 @@ def wipe_all_data():
     """Saari tables ka poora data hata deta hai (ids bhi shuru se)."""
     with closing(sqlite3.connect(DB_PATH)) as c:
         c.execute("PRAGMA foreign_keys = ON")
-        for t in ("loan_payments", "loans", "txns", "parties", "income", "expenses"):
-            c.execute(f"DELETE FROM {t}")
+        for tbl in ("loan_payments", "loans", "txns", "parties", "income", "expenses"):
+            c.execute(f"DELETE FROM {tbl}")
         c.execute("DELETE FROM sqlite_sequence")
         c.commit()
 
@@ -1189,17 +1623,16 @@ def wipe_callback():
 
 def wipe_section(counts):
     st.divider()
-    st.markdown("#### Delete all data")
+    st.markdown(t("#### Delete all data"))
     st.caption(counts)
-    with st.expander("Danger zone"):
+    with st.expander(t("Danger zone")):
         st.error(
-            "This permanently deletes all lending records, parties, income, kharcha, loans and instalments. "
-            "It cannot be undone. Download an Excel backup first."
+            t("This permanently deletes all lending records, parties, income, expenses, loans and instalments. It cannot be undone. Download an Excel backup first.")
         )
-        sure = st.checkbox("I understand that all data will be deleted", key="wipe_sure")
-        word = st.text_input("Type DELETE to confirm", key="wipe_word", placeholder="DELETE")
+        sure = st.checkbox(t("I understand that all data will be deleted"), key="wipe_sure")
+        word = st.text_input(t("Type DELETE to confirm"), key="wipe_word", placeholder=t("DELETE"))
         st.button(
-            "Delete all data", type="primary",
+            t("Delete all data"), type="primary",
             disabled=not (sure and word.strip().upper() == "DELETE"),
             on_click=wipe_callback,
         )
@@ -1208,10 +1641,9 @@ def wipe_section(counts):
 def page_backup():
     hero("Backup & restore", "Keep a safe copy of your records")
     if st.session_state.pop("wiped", False):
-        st.success("All data has been deleted.")
+        st.success(t("All data has been deleted."))
     st.warning(
-        "On Streamlit Cloud the database file can be lost when the app restarts. "
-        "Download an Excel backup regularly."
+        t("On Streamlit Cloud the database file can be lost when the app restarts. Download an Excel backup regularly.")
     )
     df = txns_df()
     export = df[["party", "date", "kind", "amount", "note"]]
@@ -1230,17 +1662,18 @@ def page_backup():
     wipe_box = st.container()
     with wipe_box:
         wipe_section(
-            f"Currently stored: {len(export)} lending entries, {len(phones)} parties, "
-            f"{len(inc_export)} income entries, {len(exp_export)} kharcha entries, {len(loan_export)} loans, {len(pay_export)} instalment/penalty payments"
+            tf("Currently stored: {a} lending entries, {b} parties, {c} income entries, {d} expense entries, {e} loans, {f} instalment/penalty payments",
+               a=len(export), b=len(phones), c=len(inc_export), d=len(exp_export),
+               e=len(loan_export), f=len(pay_export))
         )
     with c1:
-        st.markdown("#### Backup")
+        st.markdown(t("#### Backup"))
         st.caption(
-            f"{len(export)} lending entries, {len(phones)} parties, "
-            f"{len(inc_export)} income entries, {len(exp_export)} kharcha entries, {len(loan_export)} loans"
+            tf("{a} lending entries, {b} parties, {c} income entries, {d} expense entries, {e} loans",
+               a=len(export), b=len(phones), c=len(inc_export), d=len(exp_export), e=len(loan_export))
         )
         st.download_button(
-            "Download Excel backup",
+            t("Download Excel backup"),
             to_xlsx_multi({
                 "Udhari": export, "Income": inc_export,
                 "Loan": loan_export, "Kist_Penalty": pay_export,
@@ -1250,20 +1683,20 @@ def page_backup():
             mime=XLSX_MIME, disabled=empty, type="primary",
         )
     with c2:
-        st.markdown("#### Restore")
+        st.markdown(t("#### Restore"))
         st.download_button(
-            "Download blank restore template",
+            t("Download blank restore template"),
             template_xlsx(),
             file_name="udhari_restore_format.xlsx",
             mime=XLSX_MIME,
-            help="Fill in this template and upload it below. The Instructions sheet explains each column.",
+            help=t("Fill in this template and upload it below. The Instructions sheet explains each column."),
         )
-        up = st.file_uploader("Select a backup file", type=["xlsx", "csv"], label_visibility="collapsed")
-        if up is not None and st.button("Restore"):
+        up = st.file_uploader(t("Select a backup file"), type=["xlsx", "csv"], label_visibility="collapsed")
+        if up is not None and st.button(t("Restore")):
             sheets = read_backup_all(up)
             ud, ic, lo, kp, ke = (sheets[k] for k in SHEETS)
             if all(x is None for x in (ud, ic, lo, kp, ke)):
-                st.error("The file must contain at least one of these sheets: Udhari, Income, Loan, Kist_Penalty, Kharcha.")
+                st.error(t("The file must contain at least one of these sheets: Udhari, Income, Loan, Kist_Penalty, Kharcha."))
                 return
 
             msgs = []
@@ -1272,11 +1705,11 @@ def page_backup():
                     ud["kind"] = ud["kind"].replace(LEGACY_KINDS)
                 need = {"party", "date", "kind", "amount", "note"}
                 if not need.issubset(ud.columns):
-                    st.error("The Udhari sheet must have these columns: party, date, kind, amount, note")
+                    st.error(t("The Udhari sheet must have these columns: party, date, kind, amount, note"))
                     return
                 bad = set(ud["kind"]) - set(KINDS)
                 if bad:
-                    st.error(f"Unrecognised 'kind' values: {', '.join(map(str, bad))}")
+                    st.error(tf("Unrecognised 'kind' values: {v}", v=", ".join(map(str, bad))))
                     return
                 seen = {
                     (r.party, str(r.date), r.kind, round(float(r.amount), 2), str(r.note or ""))
@@ -1295,11 +1728,11 @@ def page_backup():
                     )
                     seen.add(key)
                     added += 1
-                msgs.append(f"Udhari: {added} entries added, {skipped} already present.")
+                msgs.append(tf("Udhari: {a} entries added, {s} already present.", a=added, s=skipped))
 
             if ic is not None:
                 if not {"date", "amount", "source", "note"}.issubset(ic.columns):
-                    st.error("The Income sheet must have these columns: date, amount, source, note")
+                    st.error(t("The Income sheet must have these columns: date, amount, source, note"))
                     return
                 have = {(str(r.date), round(float(r.amount), 2), str(r.source), str(r.note)) for r in inc.itertuples()}
                 added = skipped = 0
@@ -1312,11 +1745,11 @@ def page_backup():
                         (key[0], float(r["amount"]), key[2], key[3]))
                     have.add(key)
                     added += 1
-                msgs.append(f"Income: {added} entries added, {skipped} already present.")
+                msgs.append(tf("Income: {a} entries added, {s} already present.", a=added, s=skipped))
 
             if ke is not None:
                 if not set(EXP_COLS).issubset(ke.columns):
-                    st.error("The Kharcha sheet must have these columns: " + ", ".join(EXP_COLS))
+                    st.error(t("The Kharcha sheet must have these columns: ") + ", ".join(EXP_COLS))
                     return
                 have = {
                     (str(r.date)[:10], round(float(r.amount), 2), str(r.place).strip(), str(r.note))
@@ -1343,11 +1776,11 @@ def page_backup():
                     )
                     have.add(key)
                     added += 1
-                msgs.append(f"Kharcha: {added} added, {skipped} already present, {bad} invalid rows skipped.")
+                msgs.append(tf("Expenses: {a} added, {s} already present, {b} invalid rows skipped.", a=added, s=skipped, b=bad))
 
             if lo is not None:
                 if not set(LOAN_COLS).issubset(lo.columns):
-                    st.error("The Loan sheet must have these columns: " + ", ".join(LOAN_COLS))
+                    st.error(t("The Loan sheet must have these columns: ") + ", ".join(LOAN_COLS))
                     return
                 names = {str(n).lower() for n in loans["name"]}
                 added = skipped = bad = 0
@@ -1375,12 +1808,12 @@ def page_backup():
                     names.add(nm.lower())
                     added += 1
                 msgs.append(
-                    f"Loan: {added} added, {skipped} already present, {bad} invalid rows skipped."
+                    tf("Loan: {a} added, {s} already present, {b} invalid rows skipped.", a=added, s=skipped, b=bad)
                 )
 
             if kp is not None:
                 if not set(PAY_COLS).issubset(kp.columns):
-                    st.error("The Kist_Penalty sheet must have these columns: " + ", ".join(PAY_COLS))
+                    st.error(t("The Kist_Penalty sheet must have these columns: ") + ", ".join(PAY_COLS))
                     return
                 ids = {str(r["name"]).lower(): int(r["id"]) for r in loans_df().to_dict("records")}
                 have = {
@@ -1410,7 +1843,7 @@ def page_backup():
                     have.add(key)
                     added += 1
                 msgs.append(
-                    f"Instalments/penalties: {added} added, {skipped} already present, {bad} invalid rows skipped."
+                    tf("Instalments/penalties: {a} added, {s} already present, {b} invalid rows skipped.", a=added, s=skipped, b=bad)
                 )
 
             st.success("  \n".join(msgs))
@@ -1431,16 +1864,16 @@ def edit_gate():
         return True
     _, mid, _ = st.columns([1, 1.2, 1])
     with mid:
-        st.info("Editing old records is protected. Enter the edit password to continue.")
+        st.info(t("Editing old records is protected. Enter the edit password to continue."))
         with st.form("edit_login"):
-            entered = st.text_input("Edit password", type="password")
-            ok = st.form_submit_button("Unlock editing", use_container_width=True, type="primary")
+            entered = st.text_input(t("Edit password"), type="password")
+            ok = st.form_submit_button(t("Unlock editing"), use_container_width=True, type="primary")
         if ok:
             if hmac.compare_digest(entered.encode(), edit_password().encode()):
                 st.session_state["edit_ok"] = True
                 st.rerun()
             else:
-                st.error("Incorrect password.")
+                st.error(t("Incorrect password."))
     return False
 
 
@@ -1456,11 +1889,11 @@ def cleanup_parties():
 
 
 def delete_block(table, rid, key, warn=""):
-    with st.expander("Delete this record"):
+    with st.expander(t("Delete this record")):
         if warn:
-            st.warning(warn)
-        sure = st.checkbox("Yes, delete this record permanently", key=f"del_ok_{key}_{rid}")
-        if st.button("Delete", key=f"del_{key}_{rid}", disabled=not sure):
+            st.warning(t(warn))
+        sure = st.checkbox(t("Yes, delete this record permanently"), key=f"del_ok_{key}_{rid}")
+        if st.button(t("Delete"), key=f"del_{key}_{rid}", disabled=not sure):
             run(f"DELETE FROM {table} WHERE id = ?", (int(rid),))
             cleanup_parties()
             st.session_state["flash"] = "Record deleted."
@@ -1474,14 +1907,14 @@ def _d(v):
 def edit_txns():
     df = txns_df()
     if df.empty:
-        st.info("No lending or borrowing entries yet.")
+        st.info(t("No lending or borrowing entries yet."))
         return
     df = df.sort_values(["date", "id"], ascending=False)
     labels = {
-        int(r["id"]): f"{r['date']} | {r['party']} | {r['kind']} | {inr(r['amount'])}"
+        int(r["id"]): f"{r['date']} | {r['party']} | {t(r['kind'])} | {inr(r['amount'])}"
         for _, r in df.iterrows()
     }
-    rid = st.selectbox("Select entry", list(labels), format_func=labels.get, key="edit_txn_pick")
+    rid = st.selectbox(t("Select entry"), list(labels), format_func=labels.get, key="edit_txn_pick")
     r = df[df["id"] == rid].iloc[0]
     kinds = list(KINDS)
     cur_phone = ""
@@ -1489,29 +1922,29 @@ def edit_txns():
     if not prow.empty:
         cur_phone = (prow.iloc[0]["phone"] or "").strip()
     with st.form(f"edit_txn_{rid}"):
-        name = st.text_input("Party name (change it to move this entry to another party)", value=r["party"])
+        name = st.text_input(t("Party name (change it to move this entry to another party)"), value=r["party"])
         phone = st.text_input(
-            "Phone (required)", value=cur_phone, placeholder="98xxxxxx10",
-            help="Is party ka number. Yahan badloge to party ka number update ho jayega. "
-                 "Agar entry kisi doosri saved party me move karte ho to uska saved number hi use hoga.",
+            t("Phone (required)"), value=cur_phone, placeholder=t("98xxxxxx10"),
+            help=t("This party's phone number. Changing it here updates the party's number. If you move this entry to another saved party, that party's saved number is used."),
         )
-        kind = st.selectbox("Transaction type", kinds, index=kinds.index(r["kind"]) if r["kind"] in kinds else 0)
+        kind = st.selectbox(t("Transaction type"), kinds, index=kinds.index(r["kind"]) if r["kind"] in kinds else 0,
+                            format_func=t)
         a, b = st.columns(2)
-        amount = a.number_input("Amount (₹)", min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
-        tdate = b.date_input("Date", value=_d(r["date"]))
-        note = st.text_input("Note (optional)", value=r["note"] or "")
-        ok = st.form_submit_button("Save changes", type="primary", use_container_width=True)
+        amount = a.number_input(t("Amount (₹)"), min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
+        tdate = b.date_input(t("Date"), value=_d(r["date"]))
+        note = st.text_input(t("Note (optional)"), value=r["note"] or "")
+        ok = st.form_submit_button(t("Save changes"), type="primary", use_container_width=True)
     if ok:
         digits = "".join(ch for ch in phone if ch.isdigit())
         target = query_df("SELECT id, phone FROM parties WHERE name = ?", (name.strip(),))
         target_phone = (target.iloc[0]["phone"] or "").strip() if not target.empty else ""
         moving_to_saved = (not target.empty) and int(target.iloc[0]["id"]) != int(r["party_id"]) and target_phone
         if not name.strip():
-            st.error("Party name cannot be empty.")
+            st.error(t("Party name cannot be empty."))
         elif not moving_to_saved and len(digits) < 10:
-            st.error("Phone number is required (at least 10 digits).")
+            st.error(t("Phone number is required (at least 10 digits)."))
         elif amount <= 0:
-            st.error("Amount must be greater than 0.")
+            st.error(t("Amount must be greater than 0."))
         else:
             pid = get_or_create_party(name, phone.strip())
             if not moving_to_saved:
@@ -1529,39 +1962,39 @@ def edit_txns():
 def edit_income():
     df = income_df()
     if df.empty:
-        st.info("No income entries yet.")
+        st.info(t("No income entries yet."))
         return
     df = df.sort_values(["date", "id"], ascending=False)
     labels = {
         int(r["id"]): f"{r['date']} | {r['source']} | {inr(r['amount'])}" for _, r in df.iterrows()
     }
-    rid = st.selectbox("Select income entry", list(labels), format_func=labels.get, key="edit_inc_pick")
+    rid = st.selectbox(t("Select income entry"), list(labels), format_func=labels.get, key="edit_inc_pick")
     r = df[df["id"] == rid].iloc[0]
     cur = (r["source"] or "").strip()
     in_list = cur in INCOME_SOURCES and cur != "Other"
     # form ke bahar, taaki 'Other' chunte hi naam likhne ka box turant aa jaye
     src_pick = st.selectbox(
-        "Source", INCOME_SOURCES, key=f"edit_inc_src_{rid}",
+        t("Source"), INCOME_SOURCES, key=f"edit_inc_src_{rid}", format_func=t,
         index=INCOME_SOURCES.index(cur) if in_list else INCOME_SOURCES.index("Other"),
     )
     other = ""
     if src_pick == "Other":
         other = st.text_input(
-            "Specify source", value="" if in_list else cur,
-            placeholder="e.g. Tuition, Freelance", key=f"edit_inc_other_{rid}",
+            t("Specify source"), value="" if in_list else cur,
+            placeholder=t("e.g. Tuition, Freelance"), key=f"edit_inc_other_{rid}",
         )
     with st.form(f"edit_inc_{rid}"):
         a, b = st.columns(2)
-        amount = a.number_input("Amount (₹)", min_value=0.0, value=float(r["amount"]), step=500.0, format="%.2f")
-        idate = b.date_input("Date received", value=_d(r["date"]))
-        note = st.text_input("Note (optional)", value=r["note"] or "")
-        ok = st.form_submit_button("Save changes", type="primary", use_container_width=True)
+        amount = a.number_input(t("Amount (₹)"), min_value=0.0, value=float(r["amount"]), step=500.0, format="%.2f")
+        idate = b.date_input(t("Date received"), value=_d(r["date"]))
+        note = st.text_input(t("Note (optional)"), value=r["note"] or "")
+        ok = st.form_submit_button(t("Save changes"), type="primary", use_container_width=True)
     if ok:
         source = other.strip() if src_pick == "Other" else src_pick
         if amount <= 0:
-            st.error("Amount must be greater than 0.")
+            st.error(t("Amount must be greater than 0."))
         elif not source:
-            st.error("Specify the source when 'Other' is selected.")
+            st.error(t("Specify the source when 'Other' is selected."))
         else:
             run(
                 "UPDATE income SET idate=?, amount=?, source=?, note=? WHERE id=?",
@@ -1577,44 +2010,45 @@ def loan_total_note(loan):
     pays = loan_pay_df()
     inf = loan_summary(dict(loan), pays[pays["loan_id"] == int(loan["id"])], date.today())
     st.info(
-        f"Instalments due {inr(inf['pending'])} + penalty due {inr(inf['pen_due'])} "
-        f"= total outstanding {inr(inf['pending'] + inf['pen_due'])}  \n"
-        f"Penalty accrued so far {inr(inf['pen_total'])}, penalty paid {inr(inf['pen_paid'])}."
+        tf("Instalments due {a} + penalty due {b} = total outstanding {c}",
+           a=inr(inf['pending']), b=inr(inf['pen_due']), c=inr(inf['pending'] + inf['pen_due']))
+        + "  \n"
+        + tf("Penalty accrued so far {d}, penalty paid {e}.", d=inr(inf['pen_total']), e=inr(inf['pen_paid']))
     )
 
 
 def edit_expenses():
     df = expenses_df()
     if df.empty:
-        st.info("No kharcha entries yet.")
+        st.info(t("No expense entries yet."))
         return
     df = df.sort_values(["date", "id"], ascending=False)
     labels = {
-        int(r["id"]): f"{r['date']} | {r['place']} | {r['category']} | {inr(r['amount'])}"
+        int(r["id"]): f"{r['date']} | {r['place']} | {t(r['category'])} | {inr(r['amount'])}"
         for _, r in df.iterrows()
     }
-    rid = st.selectbox("Select kharcha entry", list(labels), format_func=labels.get, key="edit_exp_pick")
+    rid = st.selectbox(t("Select expense entry"), list(labels), format_func=labels.get, key="edit_exp_pick")
     r = df[df["id"] == rid].iloc[0]
     cats = EXPENSE_CATS if r["category"] in EXPENSE_CATS else EXPENSE_CATS + [r["category"]]
     with st.form(f"edit_exp_{rid}"):
-        place = st.text_input("Kahan kharch kiya", value=r["place"])
-        cat = st.selectbox("Category", cats, index=cats.index(r["category"]))
+        place = st.text_input(t("Where was it spent?"), value=r["place"])
+        cat = st.selectbox(t("Category"), cats, index=cats.index(r["category"]), format_func=t)
         a, b = st.columns(2)
-        amount = a.number_input("Amount (₹)", min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
-        edate = b.date_input("Date", value=_d(r["date"]))
-        note = st.text_input("Note (optional)", value=r["note"] or "")
-        ok = st.form_submit_button("Save changes", type="primary", use_container_width=True)
+        amount = a.number_input(t("Amount (₹)"), min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
+        edate = b.date_input(t("Date"), value=_d(r["date"]))
+        note = st.text_input(t("Note (optional)"), value=r["note"] or "")
+        ok = st.form_submit_button(t("Save changes"), type="primary", use_container_width=True)
     if ok:
         if not place.strip():
-            st.error("Place cannot be empty.")
+            st.error(t("Place cannot be empty."))
         elif amount <= 0:
-            st.error("Amount must be greater than 0.")
+            st.error(t("Amount must be greater than 0."))
         else:
             run(
                 "UPDATE expenses SET edate=?, amount=?, place=?, category=?, note=? WHERE id=?",
                 (edate.isoformat(), float(amount), place.strip(), cat, note.strip(), int(rid)),
             )
-            st.session_state["flash"] = "Kharcha updated."
+            st.session_state["flash"] = "Expense updated."
             st.rerun()
     delete_block("expenses", rid, "exp")
 
@@ -1622,38 +2056,38 @@ def edit_expenses():
 def edit_loans():
     df = loans_df()
     if df.empty:
-        st.info("No loans yet.")
+        st.info(t("No loans yet."))
         return
     labels = {int(r["id"]): f"{r['name']} | {inr(r['kist_amount'])} × {int(r['total_kists'])}" for _, r in df.iterrows()}
-    rid = st.selectbox("Select loan", list(labels), format_func=labels.get, key="edit_loan_pick")
+    rid = st.selectbox(t("Select loan"), list(labels), format_func=labels.get, key="edit_loan_pick")
     r = df[df["id"] == rid].iloc[0]
     loan_total_note(r)
     ptypes = list(LOAN_PEN_TYPES)
     with st.form(f"edit_loan_{rid}"):
-        name = st.text_input("Loan name", value=r["name"])
+        name = st.text_input(t("Loan name"), value=r["name"])
         a, b, c = st.columns(3)
-        loan_amount = a.number_input("Loan amount (₹, optional)", min_value=0.0, value=float(r["loan_amount"] or 0), step=1000.0, format="%.2f")
-        kist = b.number_input("Instalment amount (₹)", min_value=0.0, value=float(r["kist_amount"]), step=100.0, format="%.2f")
-        n = c.number_input("Number of instalments", min_value=1, value=int(r["total_kists"]), step=1)
+        loan_amount = a.number_input(t("Loan amount (₹, optional)"), min_value=0.0, value=float(r["loan_amount"] or 0), step=1000.0, format="%.2f")
+        kist = b.number_input(t("Instalment amount (₹)"), min_value=0.0, value=float(r["kist_amount"]), step=100.0, format="%.2f")
+        n = c.number_input(t("Number of instalments"), min_value=1, value=int(r["total_kists"]), step=1)
         d, e, f = st.columns(3)
         ptype = d.selectbox(
-            "Penalty type", ptypes, format_func=LOAN_PEN_TYPES.get,
+            t("Penalty type"), ptypes, format_func=lambda k: t(LOAN_PEN_TYPES.get(k, k)),
             index=ptypes.index(r["penalty_type"]) if r["penalty_type"] in ptypes else 0,
         )
-        pen = e.number_input("Penalty amount / % ", min_value=0.0, value=float(r["penalty_amount"]), step=10.0, format="%.2f")
-        first = f.date_input("First due date", value=_d(r["first_due"]))
-        note = st.text_input("Note (optional)", value=r["note"] or "")
-        ok = st.form_submit_button("Save changes", type="primary", use_container_width=True)
+        pen = e.number_input(t("Penalty amount / %"), min_value=0.0, value=float(r["penalty_amount"]), step=10.0, format="%.2f")
+        first = f.date_input(t("First due date"), value=_d(r["first_due"]))
+        note = st.text_input(t("Note (optional)"), value=r["note"] or "")
+        ok = st.form_submit_button(t("Save changes"), type="primary", use_container_width=True)
     if ok:
         name = name.strip()
         if not name:
-            st.error("Enter a loan name.")
+            st.error(t("Enter a loan name."))
         elif kist <= 0:
-            st.error("Instalment amount must be greater than 0.")
+            st.error(t("Instalment amount must be greater than 0."))
         elif not query_df(
             "SELECT 1 FROM loans WHERE name = ? COLLATE NOCASE AND id != ?", (name, int(rid))
         ).empty:
-            st.error("Another loan already has this name.")
+            st.error(t("Another loan already has this name."))
         else:
             run(
                 "UPDATE loans SET name=?, loan_amount=?, kist_amount=?, total_kists=?, first_due=?, "
@@ -1669,14 +2103,14 @@ def edit_loans():
 def edit_loan_payments():
     df = loan_pay_df()
     if df.empty:
-        st.info("No instalment or penalty payments yet.")
+        st.info(t("No instalment or penalty payments yet."))
         return
     df = df.sort_values(["date", "id"], ascending=False)
     labels = {
-        int(r["id"]): f"{r['date']} | {r['loan']} | {r['kind']} | {inr(r['amount'])}"
+        int(r["id"]): f"{r['date']} | {r['loan']} | {t('Instalment' if r['kind'] == 'kist' else 'Penalty')} | {inr(r['amount'])}"
         for _, r in df.iterrows()
     }
-    rid = st.selectbox("Select payment", list(labels), format_func=labels.get, key="edit_pay_pick")
+    rid = st.selectbox(t("Select payment"), list(labels), format_func=labels.get, key="edit_pay_pick")
     r = df[df["id"] == rid].iloc[0]
     loans = loans_df()
     loan_ids = {row["name"]: int(row["id"]) for row in loans.to_dict("records")}
@@ -1685,20 +2119,20 @@ def edit_loan_payments():
     if r["loan"] in names:
         loan_total_note(loans[loans["id"] == r["loan_id"]].iloc[0])
     with st.form(f"edit_pay_{rid}"):
-        loan = st.selectbox("Loan", names, index=names.index(r["loan"]) if r["loan"] in names else 0)
+        loan = st.selectbox(t("Loan"), names, index=names.index(r["loan"]) if r["loan"] in names else 0)
         kind = st.radio(
-            "Payment type", kinds, horizontal=True,
-            format_func=lambda k: "Instalment" if k == "kist" else "Penalty",
+            t("Payment type"), kinds, horizontal=True,
+            format_func=lambda k: t("Instalment" if k == "kist" else "Penalty"),
             index=kinds.index(r["kind"]) if r["kind"] in kinds else 0,
         )
         a, b = st.columns(2)
-        amount = a.number_input("Amount (₹)", min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
-        pdate = b.date_input("Payment date", value=_d(r["date"]))
-        note = st.text_input("Note (optional)", value=r["note"] or "")
-        ok = st.form_submit_button("Save changes", type="primary", use_container_width=True)
+        amount = a.number_input(t("Amount (₹)"), min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
+        pdate = b.date_input(t("Payment date"), value=_d(r["date"]))
+        note = st.text_input(t("Note (optional)"), value=r["note"] or "")
+        ok = st.form_submit_button(t("Save changes"), type="primary", use_container_width=True)
     if ok:
         if amount <= 0:
-            st.error("Amount must be greater than 0.")
+            st.error(t("Amount must be greater than 0."))
         else:
             run(
                 "UPDATE loan_payments SET loan_id=?, pdate=?, kind=?, amount=?, note=? WHERE id=?",
@@ -1727,7 +2161,7 @@ def all_transactions():
         })
     for r in expenses_df().itertuples():
         rows.append({
-            "Date": r.date, "Group": "Kharcha", "Type": r.category, "Party / loan": r.place,
+            "Date": r.date, "Group": "Expenses", "Type": r.category, "Party / loan": r.place,
             "Direction": "Out", "Amount": float(r.amount), "Note": r.note or "",
         })
     for r in loan_pay_df().itertuples():
@@ -1744,11 +2178,12 @@ def all_transactions():
 def admin_transactions():
     df = all_transactions()
     if df.empty:
-        st.info("No transactions yet.")
+        st.info(t("No transactions yet."))
         return
     f1, f2 = st.columns([1, 2])
-    group = f1.selectbox("Show", ["All", "Lending / borrowing", "Income", "Kharcha", "Loan payments"], key="adm_group")
-    q = f2.text_input("Search party, loan or note", key="adm_q")
+    group = f1.selectbox(t("Show"), ["All", "Lending / borrowing", "Income", "Expenses", "Loan payments"],
+                         key="adm_group", format_func=t)
+    q = f2.text_input(t("Search party, loan or note"), key="adm_q")
     if group != "All":
         df = df[df["Group"] == group]
     if q.strip():
@@ -1761,30 +2196,31 @@ def admin_transactions():
     money_in = float(df.loc[df["Direction"] == "In", "Amount"].sum())
     money_out = float(df.loc[df["Direction"] == "Out", "Amount"].sum())
     k1, k2, k3 = st.columns(3)
-    k1.markdown(kpi("Money in", inr(money_in), f"{int((df['Direction'] == 'In').sum())} entries", "g"), unsafe_allow_html=True)
-    k2.markdown(kpi("Money out", inr(money_out), f"{int((df['Direction'] == 'Out').sum())} entries", "r"), unsafe_allow_html=True)
+    k1.markdown(kpi("Money in", inr(money_in), tf("{n} entries", n=int((df['Direction'] == 'In').sum())), "g"), unsafe_allow_html=True)
+    k2.markdown(kpi("Money out", inr(money_out), tf("{n} entries", n=int((df['Direction'] == 'Out').sum())), "r"), unsafe_allow_html=True)
     k3.markdown(kpi("Net", inr(money_in - money_out), "in − out", "g" if money_in >= money_out else "r"), unsafe_allow_html=True)
     st.write("")
-    st.dataframe(
+    show_df(
         df.drop(columns=["Group"]), hide_index=True, use_container_width=True,
         column_config={"Amount": st.column_config.NumberColumn(format="₹%.2f")},
     )
-    st.caption("To correct or delete an entry, open 'Edit records' above.")
+    st.caption(t("To correct or delete an entry, open 'Edit records' above."))
 
 
 def page_admin():
     hero("Admin panel", "All transactions and editing of older records")
+    language_picker()
     if not edit_gate():
         return
     c1, c2 = st.columns([5, 1])
-    c1.caption("Admin panel is unlocked for this session.")
-    c2.button("Lock", on_click=lock_edit, use_container_width=True)
+    c1.caption(t("Admin panel is unlocked for this session."))
+    c2.button(t("Lock"), on_click=lock_edit, use_container_width=True)
     flash = st.session_state.pop("flash", None)
     if flash:
-        st.success(flash)
+        st.success(t(flash))
     section = st.radio(
-        "Section", ["Transactions", "Edit records"], horizontal=True,
-        key="admin_section", label_visibility="collapsed",
+        t("Section"), ["Transactions", "Edit records"], horizontal=True,
+        key="admin_section", label_visibility="collapsed", format_func=t,
     )
     if section == "Transactions":
         admin_transactions()
@@ -1792,31 +2228,32 @@ def page_admin():
     sections = {
         "Lending / borrowing": edit_txns,
         "Income": edit_income,
-        "Kharcha": edit_expenses,
+        "Expenses": edit_expenses,
         "Loans": edit_loans,
         "Instalment / penalty payments": edit_loan_payments,
     }
-    pick = st.radio("Record type", list(sections), horizontal=True, key="edit_type")
+    pick = st.radio(t("Record type"), list(sections), horizontal=True, key="edit_type", format_func=t)
     sections[pick]()
 
 
 # ---------------------------------------------------------------- main
 def main():
     init_db()
+    load_language()
     st.markdown(CSS, unsafe_allow_html=True)
     if not check_password():
         return
     if "page" not in st.session_state or st.session_state["page"] not in PAGES:
         st.session_state["page"] = P_DASH
-    st.sidebar.markdown('<div class="brand">Udhari Khata</div>', unsafe_allow_html=True)
-    st.sidebar.caption("Personal ledger")
-    st.sidebar.radio("Menu", PAGES, key="page", label_visibility="collapsed")
+    st.sidebar.markdown(f'<div class="brand">{t("Udhari Khata")}</div>', unsafe_allow_html=True)
+    st.sidebar.caption(t("Personal ledger"))
+    st.sidebar.radio(t("Menu"), PAGES, key="page", label_visibility="collapsed", format_func=t)
 
     s = summary_df()
     if not s.empty and s["entries"].sum() > 0:
         st.sidebar.divider()
-        st.sidebar.metric("Net balance", inr(s["balance"].sum()))
-        st.sidebar.caption(f"{len(s)} parties, {int(s['entries'].sum())} entries")
+        st.sidebar.metric(t("Net balance"), inr(s["balance"].sum()))
+        st.sidebar.caption(tf("{p} parties, {n} entries", p=len(s), n=int(s['entries'].sum())))
 
     {
         P_DASH: page_dashboard,
