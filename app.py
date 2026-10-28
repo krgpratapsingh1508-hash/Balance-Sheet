@@ -1,6 +1,6 @@
 """Udhari Khata - personal ledger for lending, borrowing, income and loan instalments.
 
-Three pages: Dashboard, New entry, Backup & restore.
+Three pages: Dashboard, New entry, Admin panel (Edit records, Backup & restore are inside it, behind the password).
 """
 
 import calendar
@@ -53,8 +53,7 @@ BLUE = "#0f3d4c"
 P_DASH = "Dashboard"
 P_NEW = "New entry"
 P_EDIT = "Admin panel"
-P_BACKUP = "Backup & restore"
-PAGES = [P_DASH, P_NEW, P_BACKUP, P_EDIT]  # Admin panel is always last
+PAGES = [P_DASH, P_NEW, P_EDIT]  # Admin panel is always last
 
 # Password needed to edit or delete old records. Override with EDIT_PASSWORD in Streamlit secrets.
 EDIT_PASSWORD_DEFAULT = "0610"
@@ -380,6 +379,7 @@ HI = {
         "किस्तें/जुर्माना: {a} जुड़े, {s} पहले से मौजूद थे, {b} गलत पंक्तियाँ छोड़ी गईं।",
     # admin panel
     "All transactions and editing of older records": "सभी लेन-देन और पुराने रिकॉर्ड में बदलाव",
+    "Transactions, editing of older records, backup & restore": "लेन-देन, पुराने रिकॉर्ड में बदलाव, बैकअप और रिस्टोर",
     "Editing old records is protected. Enter the edit password to continue.":
         "पुराने रिकॉर्ड में बदलाव सुरक्षित है। आगे बढ़ने के लिए एडिट पासवर्ड डालें।",
     "Edit password": "एडिट पासवर्ड",
@@ -2101,8 +2101,7 @@ def wipe_section(counts):
         )
 
 
-def page_backup():
-    hero("Backup & restore", "Keep a safe copy of your records")
+def backup_section():
     if st.session_state.pop("wiped", False):
         st.success(t("All data has been deleted."))
     st.warning(
@@ -2773,7 +2772,7 @@ def admin_transactions():
 
 
 def page_admin():
-    hero("Admin panel", "All transactions and editing of older records")
+    hero("Admin panel", "Transactions, editing of older records, backup & restore")
     language_picker()
     if not edit_gate():
         return
@@ -2784,11 +2783,14 @@ def page_admin():
     if flash:
         st.success(t(flash))
     section = st.radio(
-        t("Section"), ["Transactions", "Edit records"], horizontal=True,
+        t("Section"), ["Transactions", "Edit records", "Backup & restore"], horizontal=True,
         key="admin_section", label_visibility="collapsed", format_func=t,
     )
     if section == "Transactions":
         admin_transactions()
+        return
+    if section == "Backup & restore":
+        backup_section()
         return
     sections = {
         "Lending / borrowing": edit_txns,
@@ -2833,7 +2835,6 @@ def main():
         P_DASH: page_dashboard,
         P_NEW: page_new_entry,
         P_EDIT: page_admin,
-        P_BACKUP: page_backup,
     }[st.session_state["page"]]()
 
 
