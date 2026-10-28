@@ -430,7 +430,9 @@ HI = {
     # follow-up alerts
     "Follow-ups": "फ़ॉलो-अप",
     "Return dates of unpaid entries": "बाकी एंट्रियों की वापसी की तारीखें",
-    "No return date": "वापसी की तारीख नहीं",
+    "No return date": "वापसी की तारीख नहीं (अलर्ट नहीं आएगा)",
+    "After sending, press Done to clear this alert.": "संदेश भेजने के बाद 'Done' दबाएँ, तब यह अलर्ट हटेगा।",
+    "OK, I have seen this": "ठीक है, मैंने देख लिया",
     "In {n} days": "{n} दिन बाद",
     "Party": "पार्टी",
     "Entry date": "एंट्री की तारीख",
@@ -740,6 +742,11 @@ def init_db():
                 place TEXT NOT NULL,
                 note TEXT DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS alert_acks(
+                party_id INTEGER NOT NULL REFERENCES parties(id) ON DELETE CASCADE,
+                due TEXT NOT NULL,
+                PRIMARY KEY(party_id, due)
+            );
             CREATE TABLE IF NOT EXISTS loans(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE NOT NULL COLLATE NOCASE,
@@ -945,8 +952,6 @@ def go(page, party=None):
 # ---------------------------------------------------------------- follow-up alerts
 # Every "Money lent" / "Money borrowed" entry carries a return date. The alert appears when that date arrives.
 # Older entries saved without a date fall back to these limits.
-FOLLOW_RECEIVABLE_MONTHS = 2
-FOLLOW_PAYABLE_DAYS = 15
 DATED_KINDS = ("Money lent", "Money borrowed")
 
 
@@ -986,6 +991,13 @@ def close_msg(pid):
     st.session_state.pop(f"fu_txt_{pid}", None)
 
 
+def ack_alert(pid, dues):
+    """'OK' dabane par ye alert (in return dates ke liye) band ho jata hai. Nayi return date aane par fir aayega."""
+    for d in dues:
+        run("INSERT OR IGNORE INTO alert_acks(party_id, due) VALUES (?,?)", (int(pid), d))
+    close_msg(pid)
+
+
 def _iso(v):
     try:
         return date.fromisoformat(str(v or "")[:10])
@@ -1017,6 +1029,8 @@ def followup_alerts():
     df = txns_df()
     fu = query_df("SELECT party_id, mode, promise_date, set_on FROM followups")
     fmap = {int(r.party_id): r for r in fu.itertuples()}
+    acks = query_df("SELECT party_id, due FROM alert_acks")
+    acked = {(int(r.party_id), str(r.due)) for r in acks.itertuples()}
     alerts, never = [], []
     for r in s.itertuples():
         pid = int(r.id)
@@ -1039,18 +1053,17 @@ def followup_alerts():
             continue
         promise = _iso(f.promise_date) if (f is not None and f.mode == "date") else None
         set_on = _iso(f.set_on) if f is not None else None
-        # Each unpaid entry has its own return date. Entries saved without a date use the old limits.
+        # Alert comes on the entry's own return date. Entries without a return date never raise an alert.
         for e in ents:
-            if e["own_due"]:
-                e["due"], e["dated"] = e["own_due"], True
-            else:
-                e["due"] = (add_months(e["date"], FOLLOW_RECEIVABLE_MONTHS) if sign > 0
-                            else e["date"] + timedelta(days=FOLLOW_PAYABLE_DAYS))
-                e["dated"] = False
+            e["due"], e["dated"] = e["own_due"], True
             # A date chosen on an alert replaces the return date of the entries that were already due then
-            if promise and (set_on is None or e["due"] <= set_on):
-                e["due"], e["dated"] = promise, True
-        due_now = [e for e in ents if e["due"] <= today]
+            if promise and e["due"] and (set_on is None or e["due"] <= set_on):
+                e["due"] = promise
+        ents = [e for e in ents if e["due"]]
+        if not ents:
+            continue
+        # Stays on screen from the return date until the person presses OK (or finishes the message)
+        due_now = [e for e in ents if e["due"] <= today and (pid, e["due"].isoformat()) not in acked]
         # Hidden until a date arrives (but keep the message box open while it is being used)
         if not due_now and f"fu_txt_{pid}" not in st.session_state:
             continue
@@ -1059,6 +1072,7 @@ def followup_alerts():
             since=pick["date"], days=(today - pick["date"]).days, dated=pick["dated"], due=pick["due"],
             over=(today - pick["due"]).days,
             amt=sum(e["rem"] for e in due_now) if due_now else total,
+            keys=sorted({e["due"].isoformat() for e in due_now}),
         )
         if promise and pick["due"] == promise and promise < today:
             item["promise_passed"] = promise
@@ -1123,7 +1137,10 @@ def followup_section():
                     st.caption(t("WhatsApp opens with this message ready. Tap send there."))
                 else:
                     st.warning(t("No phone number saved for this party, so WhatsApp cannot be opened."))
-                st.button(t("Done"), key=f"fu_done_{pid}", on_click=close_msg, args=(pid,))
+                st.caption(t("After sending, press Done to clear this alert."))
+                st.button(t("Done"), key=f"fu_done_{pid}", on_click=ack_alert, args=(pid, a["keys"]))
+            st.button(t("OK, I have seen this"), key=f"fu_ok_{pid}", on_click=ack_alert,
+                      args=(pid, a["keys"]), disabled=not a["keys"])
             if lent:
                 with st.expander(t("Contact")):
                     contact_block({"name": a["name"], "phone": a["phone"]})
@@ -2047,7 +2064,7 @@ def wipe_all_data():
     """Saari tables ka poora data hata deta hai (ids bhi shuru se)."""
     with closing(sqlite3.connect(DB_PATH)) as c:
         c.execute("PRAGMA foreign_keys = ON")
-        for tbl in ("cash_spends", "loan_payments", "loans", "followups", "txns", "parties", "income", "expenses"):
+        for tbl in ("alert_acks", "cash_spends", "loan_payments", "loans", "followups", "txns", "parties", "income", "expenses"):
             c.execute(f"DELETE FROM {tbl}")
         c.execute("DELETE FROM sqlite_sequence")
         c.commit()
