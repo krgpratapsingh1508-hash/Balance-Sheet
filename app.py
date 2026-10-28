@@ -401,6 +401,17 @@ HI = {
     "{p} parties, {n} entries": "{p} पार्टियाँ, {n} एंट्रियाँ",
     # follow-up alerts
     "Follow-ups": "फ़ॉलो-अप",
+    "{name} was to return {amt} to you on {due}.": "{name} को {due} तक आपके {amt} लौटाने थे।",
+    "You were to return {amt} to {name} on {due}.": "आपको {due} तक {name} के {amt} लौटाने थे।",
+    "{n} days overdue": "{n} दिन की देर",
+    "Due today": "आज की तारीख है",
+    "Return date (lent: when they will return it, borrowed: when you will return it)":
+        "वापसी की तारीख (उधार दिया: वह कब लौटाएगा, उधार लिया: आप कब लौटाओगे)",
+    "Used only for 'Money lent' and 'Money borrowed'. You get an alert when this date arrives.":
+        "सिर्फ़ 'उधार दिया' और 'उधार लिया' के लिए। यह तारीख आने पर आपको अलर्ट मिलेगा।",
+    "Return date cannot be before the entry date.": "वापसी की तारीख एंट्री की तारीख से पहले नहीं हो सकती।",
+    "Hello {name}, a gentle reminder about the {amt} I gave you. Please return it by {d}. Thank you.":
+        "नमस्ते {name}, मैंने आपको जो {amt} दिए थे, उनकी याद दिलाना चाहता हूँ। कृपया {d} तक लौटा दीजिए। धन्यवाद।",
     "{n} follow-up(s) pending": "{n} फ़ॉलो-अप बाकी",
     "{name} owes you {amt}, unpaid for {days} days (since {since}).":
         "{name} को आपने {amt} दिए थे, {days} दिन हो गए (तारीख {since} से)।",
@@ -714,6 +725,8 @@ def init_db():
             );
             """
         )
+        if "due_date" not in [row[1] for row in c.execute("PRAGMA table_info(txns)")]:
+            c.execute("ALTER TABLE txns ADD COLUMN due_date TEXT DEFAULT ''")
         for old, new in LEGACY_KINDS.items():
             c.execute("UPDATE txns SET kind = ? WHERE kind = ?", (new, old))
         c.commit()
@@ -737,10 +750,11 @@ def parties_df():
 def txns_df():
     df = query_df(
         "SELECT t.id, t.party_id, p.name AS party, t.tdate AS date, t.kind, "
-        "t.amount, t.note FROM txns t JOIN parties p ON p.id = t.party_id "
+        "t.amount, t.note, t.due_date FROM txns t JOIN parties p ON p.id = t.party_id "
         "ORDER BY t.tdate, t.id"
     )
     df["signed"] = df["amount"] * df["kind"].map(KINDS)
+    df["due_date"] = df["due_date"].fillna("")
     return df
 
 
@@ -887,8 +901,11 @@ def go(page, party=None):
 
 
 # ---------------------------------------------------------------- follow-up alerts
-FOLLOW_RECEIVABLE_MONTHS = 2   # money you lent: alert after 2 months
-FOLLOW_PAYABLE_DAYS = 15       # money you borrowed: alert after 15 days
+# Every "Money lent" / "Money borrowed" entry carries a return date. The alert appears when that date arrives.
+# Older entries saved without a date fall back to these limits.
+FOLLOW_RECEIVABLE_MONTHS = 2
+FOLLOW_PAYABLE_DAYS = 15
+DATED_KINDS = ("Money lent", "Money borrowed")
 
 
 def set_followup(pid, mode, promise=""):
@@ -912,21 +929,30 @@ def never_pays(pid):
     set_followup(pid, "never")
 
 
-def make_payable_msg(pid, name, amt):
-    d = st.session_state[f"fu_pd_{pid}"]
+def make_msg(pid, name, amt, sign):
+    """Save the chosen date and draft the WhatsApp message (a reminder if money is to come back to you)."""
+    d = st.session_state[f"fu_d_{pid}"]
     set_followup(pid, "date", d.isoformat())
-    st.session_state[f"fu_txt_{pid}"] = tf(
-        "Hello {name}, I owe you {amt}. It will be paid by {d}. Thank you for your patience.",
-        name=name, amt=inr(amt), d=fdate(d),
-    )
+    if sign > 0:
+        tmpl = "Hello {name}, a gentle reminder about the {amt} I gave you. Please return it by {d}. Thank you."
+    else:
+        tmpl = "Hello {name}, I owe you {amt}. It will be paid by {d}. Thank you for your patience."
+    st.session_state[f"fu_txt_{pid}"] = tf(tmpl, name=name, amt=inr(amt), d=fdate(d))
 
 
 def close_msg(pid):
     st.session_state.pop(f"fu_txt_{pid}", None)
 
 
-def oldest_open_date(rows, sign):
-    """Date of the oldest part of the balance that is still unpaid (oldest entries are settled first)."""
+def _iso(v):
+    try:
+        return date.fromisoformat(str(v or "")[:10])
+    except ValueError:
+        return None
+
+
+def oldest_open_entry(rows, sign):
+    """(entry date, its return date or None) of the oldest part of the balance that is still unpaid."""
     adds = rows[rows["signed"] * sign > 0].sort_values(["date", "id"])
     left = float(-(rows.loc[rows["signed"] * sign < 0, "signed"] * sign).sum())
     for r in adds.itertuples():
@@ -934,12 +960,12 @@ def oldest_open_date(rows, sign):
         if left >= amt - 0.005:
             left -= amt
             continue
-        return date.fromisoformat(str(r.date)[:10])
+        return _iso(r.date), _iso(getattr(r, "due_date", ""))
     return None
 
 
 def followup_alerts():
-    """Parties whose money has been pending too long, plus parties marked 'will never pay'."""
+    """Parties whose return date has arrived, plus parties marked 'will never pay'."""
     today = date.today()
     s = summary_df()
     if s.empty:
@@ -956,27 +982,34 @@ def followup_alerts():
                 clear_followup(pid)  # settled, so the old follow-up is no longer needed
             continue
         sign = 1 if r.balance > 0 else -1
-        since = oldest_open_date(df[df["party_id"] == pid], sign)
-        if since is None:
+        found = oldest_open_entry(df[df["party_id"] == pid], sign)
+        if found is None or found[0] is None:
             continue
+        since, own_due = found
         item = {
             "id": pid, "name": r.name, "phone": r.phone or "", "amt": abs(float(r.balance)),
-            "sign": sign, "since": since, "days": (today - since).days, "promise": None,
+            "sign": sign, "since": since, "days": (today - since).days, "dated": True, "promise_passed": None,
         }
         if f is not None and f.mode == "never" and sign > 0:
             never.append(item)
             continue
-        due_on = add_months(since, FOLLOW_RECEIVABLE_MONTHS) if sign > 0 else since + timedelta(days=FOLLOW_PAYABLE_DAYS)
-        if today < due_on:
+        promise = _iso(f.promise_date) if (f is not None and f.mode == "date") else None
+        if promise:
+            due_on = promise  # a date chosen on the alert replaces the original return date
+        elif own_due:
+            due_on = own_due
+        else:
+            item["dated"] = False  # old entry without a return date
+            due_on = add_months(since, FOLLOW_RECEIVABLE_MONTHS) if sign > 0 else since + timedelta(days=FOLLOW_PAYABLE_DAYS)
+        # Hidden until the date arrives (but keep the message box open while it is being used)
+        if today < due_on and f"fu_txt_{pid}" not in st.session_state:
             continue
-        if f is not None and f.mode == "date" and f.promise_date:
-            promise = date.fromisoformat(f.promise_date)
-            # Hidden until the chosen date passes (but keep the message box open while it is being used)
-            if promise >= today and f"fu_txt_{pid}" not in st.session_state:
-                continue
-            if promise < today:
-                item["promise"] = promise
+        if promise and promise < today:
+            item["promise_passed"] = promise
+        item["due"] = due_on
+        item["over"] = (today - due_on).days
         alerts.append(item)
+    alerts.sort(key=lambda a: a["due"])
     return alerts, never
 
 
@@ -994,44 +1027,52 @@ def followup_section():
         st.subheader("⏰ " + t("Follow-ups"))
     for a in alerts:
         pid = a["id"]
+        lent = a["sign"] > 0
         with st.container(border=True):
-            tmpl = ("{name} owes you {amt}, unpaid for {days} days (since {since})." if a["sign"] > 0
-                    else "You owe {name} {amt}, unpaid for {days} days (since {since}).")
-            st.markdown(
-                "**" + tf(tmpl, name=a["name"], amt=inr(a["amt"]), days=a["days"], since=fdate(a["since"])) + "**"
-            )
-            if a["promise"]:
-                st.caption(tf("The date promised earlier ({d}) has passed.", d=fdate(a["promise"])))
-            if a["sign"] > 0:
-                # money lent: pick the date they will pay, or mark that they never will
-                c1, c2, c3 = st.columns([2, 1, 1.4])
-                c1.date_input(t("When will they pay?"), value=date.today() + timedelta(days=7),
-                              min_value=date.today(), key=f"fu_d_{pid}")
-                c2.write("")
-                c2.button(t("Save date"), key=f"fu_save_{pid}", on_click=save_promise, args=(pid,),
-                          use_container_width=True, type="primary")
+            if a["dated"]:
+                tmpl = ("{name} was to return {amt} to you on {due}." if lent
+                        else "You were to return {amt} to {name} on {due}.")
+                head = tf(tmpl, name=a["name"], amt=inr(a["amt"]), due=fdate(a["due"]))
+            else:
+                tmpl = ("{name} owes you {amt}, unpaid for {days} days (since {since})." if lent
+                        else "You owe {name} {amt}, unpaid for {days} days (since {since}).")
+                head = tf(tmpl, name=a["name"], amt=inr(a["amt"]), days=a["days"], since=fdate(a["since"]))
+            st.markdown("**" + head + "**")
+            if a["dated"] and a["over"] > 0:
+                st.caption(tf("{n} days overdue", n=a["over"]))
+            elif a["dated"]:
+                st.caption(t("Due today"))
+            if a["promise_passed"]:
+                st.caption(tf("The date promised earlier ({d}) has passed.", d=fdate(a["promise_passed"])))
+            # pick the (new) date, then draft a WhatsApp message for the party
+            if lent:
+                c1, c2, c3, c4 = st.columns([2, 1.2, 1, 1.2])
+            else:
+                c1, c2 = st.columns([2, 1.2])
+            c1.date_input(t("When will they pay?" if lent else "When will you pay?"),
+                          value=date.today() + timedelta(days=7), min_value=date.today(), key=f"fu_d_{pid}")
+            c2.write("")
+            c2.button(t("Make message"), key=f"fu_mk_{pid}", on_click=make_msg,
+                      args=(pid, a["name"], a["amt"], a["sign"]), use_container_width=True, type="primary")
+            if lent:
                 c3.write("")
-                c3.button(t("Will never pay"), key=f"fu_never_{pid}", on_click=never_pays, args=(pid,),
+                c3.button(t("Save date"), key=f"fu_save_{pid}", on_click=save_promise, args=(pid,),
                           use_container_width=True)
+                c4.write("")
+                c4.button(t("Will never pay"), key=f"fu_never_{pid}", on_click=never_pays, args=(pid,),
+                          use_container_width=True)
+            if f"fu_txt_{pid}" in st.session_state:
+                text = st.text_area(t("Message to send"), key=f"fu_txt_{pid}", height=110)
+                url = whatsapp_url(a["phone"], text)
+                if url:
+                    st.link_button(t("OK, send on WhatsApp"), url, type="primary")
+                    st.caption(t("WhatsApp opens with this message ready. Tap send there."))
+                else:
+                    st.warning(t("No phone number saved for this party, so WhatsApp cannot be opened."))
+                st.button(t("Done"), key=f"fu_done_{pid}", on_click=close_msg, args=(pid,))
+            if lent:
                 with st.expander(t("Contact")):
                     contact_block({"name": a["name"], "phone": a["phone"]})
-            else:
-                # money borrowed: pick your date, make a message, send it on WhatsApp
-                c1, c2 = st.columns([2, 1])
-                c1.date_input(t("When will you pay?"), value=date.today() + timedelta(days=7),
-                              min_value=date.today(), key=f"fu_pd_{pid}")
-                c2.write("")
-                c2.button(t("Make message"), key=f"fu_mk_{pid}", on_click=make_payable_msg,
-                          args=(pid, a["name"], a["amt"]), use_container_width=True, type="primary")
-                if f"fu_txt_{pid}" in st.session_state:
-                    text = st.text_area(t("Message to send"), key=f"fu_txt_{pid}", height=110)
-                    url = whatsapp_url(a["phone"], text)
-                    if url:
-                        st.link_button(t("OK, send on WhatsApp"), url, type="primary")
-                        st.caption(t("WhatsApp opens with this message ready. Tap send there."))
-                    else:
-                        st.warning(t("No phone number saved for this party, so WhatsApp cannot be opened."))
-                    st.button(t("Done"), key=f"fu_done_{pid}", on_click=close_msg, args=(pid,))
     if never:
         with st.expander(tf("Marked as 'will never pay' ({n})", n=len(never))):
             for a in never:
@@ -1643,6 +1684,11 @@ def page_new_entry():
         c, d = st.columns(2)
         amount = c.number_input(t("Amount (₹)"), min_value=0.0, step=100.0, format="%.2f")
         tdate = d.date_input(t("Date"), value=date.today())
+        rdate = st.date_input(
+            t("Return date (lent: when they will return it, borrowed: when you will return it)"),
+            value=date.today() + timedelta(days=30),
+            help=t("Used only for 'Money lent' and 'Money borrowed'. You get an alert when this date arrives."),
+        )
         note = st.text_input(t("Note (optional)"), placeholder=t("e.g. shop supplies, wedding expenses"))
         submitted = st.form_submit_button(t("Save payment"), type="primary", use_container_width=True)
 
@@ -1654,11 +1700,14 @@ def page_new_entry():
             st.error(t("Phone number is required (at least 10 digits)."))
         elif amount <= 0:
             st.error(t("Amount must be greater than 0."))
+        elif kind in DATED_KINDS and rdate < tdate:
+            st.error(t("Return date cannot be before the entry date."))
         else:
             pid = get_or_create_party(name, phone)
             run(
-                "INSERT INTO txns(party_id, tdate, kind, amount, note) VALUES (?,?,?,?,?)",
-                (pid, tdate.isoformat(), kind, float(amount), note.strip()),
+                "INSERT INTO txns(party_id, tdate, kind, amount, note, due_date) VALUES (?,?,?,?,?,?)",
+                (pid, tdate.isoformat(), kind, float(amount), note.strip(),
+                 rdate.isoformat() if kind in DATED_KINDS else ""),
             )
             st.session_state["entry_flash"] = tf("Entry saved: {a} with {n}.", a=inr(amount), n=name)
             st.session_state["entry_n"] = n + 1  # party/phone fields reset
@@ -1687,7 +1736,7 @@ def to_xlsx_multi(sheets):
 
 def _clean(d):
     d = d.fillna("")
-    for c in ("date", "first_due"):
+    for c in ("date", "first_due", "due_date"):
         if c in d.columns:
             d[c] = d[c].astype(str).str[:10]
     return d
@@ -1699,7 +1748,7 @@ def read_backup_all(f):
         out = {k: None for k in SHEETS}
         out["Udhari"] = _clean(pd.read_csv(f))
         return out
-    sheets = pd.read_excel(f, sheet_name=None, dtype={"date": str, "first_due": str})
+    sheets = pd.read_excel(f, sheet_name=None, dtype={"date": str, "first_due": str, "due_date": str})
     return {k: _clean(sheets[k]) if k in sheets else None for k in SHEETS}
 
 
@@ -1734,7 +1783,8 @@ def template_xlsx():
 
     ws1 = wb.active
     ws1.title = "Udhari"
-    make(ws1, ["party", "date", "kind", "amount", "note"], [24, 14, 28, 14, 36])
+    make(ws1, ["party", "date", "kind", "amount", "note", "due_date"], [24, 14, 28, 14, 36, 14],
+         date_cols=("date", "due_date"))
     dropdown(ws1, list(KINDS), "C2:C1000")
 
     ws2 = wb.create_sheet("Income")
@@ -1769,6 +1819,7 @@ def template_xlsx():
     ] + [("          - " + k, False) for k in KINDS] + [
         ("amount -> amount greater than 0, for example 1500 or 250.50", False),
         ("note   -> optional", False),
+        ("due_date -> optional, return date for Money lent / Money borrowed (YYYY-MM-DD); the alert uses it", False),
         ("", False),
         ("Income sheet", True),
         ("date, amount, note -> as above", False),
@@ -1850,7 +1901,7 @@ def page_backup():
         t("On Streamlit Cloud the database file can be lost when the app restarts. Download an Excel backup regularly.")
     )
     df = txns_df()
-    export = df[["party", "date", "kind", "amount", "note"]]
+    export = df[["party", "date", "kind", "amount", "note", "due_date"]]
     inc = income_df()
     inc_export = inc[["date", "amount", "source", "note"]]
     loans = loans_df()
@@ -1926,9 +1977,10 @@ def page_backup():
                         skipped += 1
                         continue
                     pid = get_or_create_party(str(r["party"]))
+                    due = str(r["due_date"])[:10] if "due_date" in ud.columns and r["kind"] in DATED_KINDS else ""
                     run(
-                        "INSERT INTO txns(party_id, tdate, kind, amount, note) VALUES (?,?,?,?,?)",
-                        (pid, str(r["date"]), r["kind"], float(r["amount"]), str(r["note"])),
+                        "INSERT INTO txns(party_id, tdate, kind, amount, note, due_date) VALUES (?,?,?,?,?,?)",
+                        (pid, str(r["date"]), r["kind"], float(r["amount"]), str(r["note"]), due),
                     )
                     seen.add(key)
                     added += 1
@@ -2136,6 +2188,11 @@ def edit_txns():
         a, b = st.columns(2)
         amount = a.number_input(t("Amount (₹)"), min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
         tdate = b.date_input(t("Date"), value=_d(r["date"]))
+        rdate = st.date_input(
+            t("Return date (lent: when they will return it, borrowed: when you will return it)"),
+            value=_iso(r["due_date"]) or (date.today() + timedelta(days=30)),
+            help=t("Used only for 'Money lent' and 'Money borrowed'. You get an alert when this date arrives."),
+        )
         note = st.text_input(t("Note (optional)"), value=r["note"] or "")
         ok = st.form_submit_button(t("Save changes"), type="primary", use_container_width=True)
     if ok:
@@ -2149,13 +2206,16 @@ def edit_txns():
             st.error(t("Phone number is required (at least 10 digits)."))
         elif amount <= 0:
             st.error(t("Amount must be greater than 0."))
+        elif kind in DATED_KINDS and rdate < tdate:
+            st.error(t("Return date cannot be before the entry date."))
         else:
             pid = get_or_create_party(name, phone.strip())
             if not moving_to_saved:
                 run("UPDATE parties SET phone = ? WHERE id = ?", (phone.strip(), pid))
             run(
-                "UPDATE txns SET party_id=?, tdate=?, kind=?, amount=?, note=? WHERE id=?",
-                (pid, tdate.isoformat(), kind, float(amount), note.strip(), int(rid)),
+                "UPDATE txns SET party_id=?, tdate=?, kind=?, amount=?, note=?, due_date=? WHERE id=?",
+                (pid, tdate.isoformat(), kind, float(amount), note.strip(),
+                 rdate.isoformat() if kind in DATED_KINDS else "", int(rid)),
             )
             cleanup_parties()
             st.session_state["flash"] = "Entry updated."
