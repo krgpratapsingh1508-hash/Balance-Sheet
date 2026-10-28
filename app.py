@@ -1244,29 +1244,6 @@ def page_dashboard():
         st.altair_chart(ichart, use_container_width=True)
         st.caption(tf("Total income to date: {a} across {n} entries", a=inr(inc['amount'].sum()), n=len(inc)))
 
-    st.subheader(t("All parties"))
-    f1, f2 = st.columns([2, 1])
-    q = f1.text_input(t("Search by name"), placeholder=t("Search by name"), label_visibility="collapsed")
-    flt = f2.selectbox(t("Filter"), ["All", "Receivable", "Payable", "Settled"],
-                       format_func=t, label_visibility="collapsed")
-    v = s.copy()
-    if q.strip():
-        v = v[v["name"].str.contains(q.strip(), case=False, regex=False)]
-    if flt == "Receivable":
-        v = v[v["balance"] > 0]
-    elif flt == "Payable":
-        v = v[v["balance"] < 0]
-    elif flt == "Settled":
-        v = v[v["balance"] == 0]
-    v = v.reindex(v["balance"].abs().sort_values(ascending=False).index)
-    if v.empty:
-        st.caption(t("No matching parties."))
-    rows = list(v.iterrows())
-    for i in range(0, len(rows), 3):
-        cols = st.columns(3)
-        for col, (_, r) in zip(cols, rows[i:i + 3]):
-            with col:
-                party_card(r, key=f"open_{r['id']}")
 
 
 def income_form():
