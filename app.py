@@ -43,7 +43,7 @@ INCOME_SOURCES = [
 EXPENSE_CATS = [
     "Ghar / Ration", "Khana-Peena", "Petrol / Travel", "Bijli / Pani / Bill",
     "Dawai / Ilaaj", "Shopping", "Padhai / Fees", "Dukaan / Business",
-    "Shaadi / Function", "Other",
+    "Shaadi / Function", "Cash", "Other",
 ]
 
 GREEN = "#1e7a4f"
@@ -258,6 +258,27 @@ HI = {
     "Specify the category when 'Other' is selected.": "'अन्य' चुनने पर श्रेणी लिखना ज़रूरी है।",
     "Expense of {a} at {p} saved.": "{p} पर {a} का खर्च सेव हो गया।",
     "Expense saved": "खर्च सेव हो गया",
+    # cash spending
+    "Cash": "नकद",
+    "Where did the cash come from?": "नकद कहाँ से लिया?",
+    "e.g. ATM, Bank, Home savings": "जैसे: ATM, बैंक, घर की बचत",
+    "Cash saved. Open it under 'Cash spending' below and record where it was spent.":
+        "नकद सेव हो गया। नीचे 'नकद का खर्च' में इसे खोलकर लिखें कि यह कहाँ खर्च हुआ।",
+    "#### Cash spending": "#### नकद का खर्च",
+    "Click a cash entry to record where that cash was spent.":
+        "किसी नकद एंट्री पर क्लिक करके लिखें कि वह नकद कहाँ खर्च हुआ।",
+    "{v} left": "{v} बाकी",
+    "Finished": "खत्म",
+    "Overspent by {v}": "{v} ज़्यादा खर्च",
+    "Spent {s} of {a}": "{a} में से {s} खर्च हुआ",
+    "Where was this cash spent?": "यह नकद कहाँ खर्च हुआ?",
+    "e.g. Vegetables, Auto fare, Tea stall": "जैसे: सब्ज़ी, ऑटो किराया, चाय की दुकान",
+    "Save cash spending": "नकद खर्च सेव करें",
+    "Cash spending of {a} at {p} saved.": "{p} पर {a} का नकद खर्च सेव हो गया।",
+    "Only {v} is left in this cash.": "इस नकद में सिर्फ़ {v} बाकी है।",
+    "Enter where the cash was spent.": "लिखें कि नकद कहाँ खर्च हुआ।",
+    "Remove a spending entry": "खर्च की कोई एंट्री हटाएँ",
+    "Delete selected": "चुनी हुई हटाएँ",
     # loan form
     "Action": "क्या करना है",
     "Add new loan": "नया लोन जोड़ें",
@@ -702,6 +723,14 @@ def init_db():
                 amount REAL NOT NULL CHECK(amount > 0),
                 place TEXT NOT NULL,
                 category TEXT DEFAULT 'Other',
+                note TEXT DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS cash_spends(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                expense_id INTEGER NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
+                sdate TEXT NOT NULL,
+                amount REAL NOT NULL CHECK(amount > 0),
+                place TEXT NOT NULL,
                 note TEXT DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS loans(
@@ -1559,6 +1588,82 @@ def income_form():
             show_cash_left()
 
 
+def cash_spend_section():
+    """Category 'Cash' wali entries: us cash me se kahan, kitna aur kab kharch hua."""
+    ex = expenses_df()
+    cash = ex[ex["category"] == "Cash"]
+    if cash.empty:
+        return
+    sp = query_df("SELECT id, expense_id, sdate AS date, amount, place, note FROM cash_spends ORDER BY sdate, id")
+    st.markdown(t("#### Cash spending"))
+    st.caption(t("Click a cash entry to record where that cash was spent."))
+    flash = st.session_state.pop("cash_flash", None)
+    if flash:
+        st.success(flash)
+    for _, r in cash.sort_values(["date", "id"], ascending=False).iterrows():
+        eid = int(r["id"])
+        edate = date.fromisoformat(str(r["date"])[:10])
+        mine = sp[sp["expense_id"] == eid]
+        total = float(r["amount"])
+        spent = float(mine["amount"].sum())
+        left = total - spent
+        if left > 0.005:
+            status = tf("{v} left", v=inr(left))
+        elif left < -0.005:
+            status = tf("Overspent by {v}", v=inr(-left))
+        else:
+            status = t("Finished")
+        title = f"💵 {inr(total)} · {fdate(edate)} · {status}"
+        with st.expander(title, expanded=st.session_state.get("cash_open") == eid):
+            st.progress(min(max(spent / total, 0.0), 1.0) if total > 0 else 0.0)
+            st.caption(tf("Spent {s} of {a}", s=inr(spent), a=inr(total)))
+            if not mine.empty:
+                tbl = mine.sort_values(["date", "id"], ascending=False)[["date", "place", "amount", "note"]]
+                tbl = tbl.rename(columns={"date": "Date", "place": "Place", "amount": "Amount", "note": "Note"})
+                show_df(
+                    tbl, hide_index=True, use_container_width=True,
+                    column_config={"Amount": st.column_config.NumberColumn(format="₹%.2f")},
+                )
+                labels = {
+                    int(x["id"]): f"{x['date']} | {x['place']} | {inr(x['amount'])}"
+                    for _, x in mine.iterrows()
+                }
+                pick = st.selectbox(t("Remove a spending entry"), list(labels), format_func=labels.get,
+                                    key=f"cash_del_pick_{eid}")
+                if st.button(t("Delete selected"), key=f"cash_del_{eid}"):
+                    run("DELETE FROM cash_spends WHERE id = ?", (int(pick),))
+                    st.session_state["cash_open"] = eid
+                    st.rerun()
+            if left > 0.005:
+                with st.form(f"cash_spend_{eid}", clear_on_submit=True):
+                    place = st.text_input(
+                        t("Where was this cash spent?"),
+                        placeholder=t("e.g. Vegetables, Auto fare, Tea stall"),
+                    )
+                    a, b = st.columns(2)
+                    amount = a.number_input(t("Amount (₹)"), min_value=0.0, max_value=round(left, 2),
+                                            step=50.0, format="%.2f")
+                    sdate = b.date_input(t("Date"), value=max(date.today(), edate), min_value=edate)
+                    note = st.text_input(t("Note (optional)"))
+                    ok = st.form_submit_button(t("Save cash spending"), type="primary", use_container_width=True)
+                if ok:
+                    if not place.strip():
+                        st.error(t("Enter where the cash was spent."))
+                    elif amount <= 0:
+                        st.error(t("Amount must be greater than 0."))
+                    elif amount > left + 0.005:
+                        st.error(tf("Only {v} is left in this cash.", v=inr(left)))
+                    else:
+                        run(
+                            "INSERT INTO cash_spends(expense_id, sdate, amount, place, note) VALUES (?,?,?,?,?)",
+                            (eid, sdate.isoformat(), float(amount), place.strip(), note.strip()),
+                        )
+                        st.session_state["cash_open"] = eid
+                        st.session_state["cash_flash"] = tf(
+                            "Cash spending of {a} at {p} saved.", a=inr(amount), p=place.strip())
+                        st.rerun()
+
+
 def expense_form():
     # form ke bahar, taaki 'Other' chunte hi naam likhne ka box turant aa jaye
     cat = st.selectbox(t("Category"), EXPENSE_CATS, key="exp_cat", format_func=t)
@@ -1568,7 +1673,10 @@ def expense_form():
     known = expenses_df()["place"].str.strip()
     known = sorted({p for p in known if p}, key=str.lower)
     with st.form("expense_form", clear_on_submit=True):
-        place = st.text_input(t("Where was it spent?"), placeholder=t("e.g. Big Bazaar, Petrol pump, Medical store"))
+        if cat == "Cash":
+            place = st.text_input(t("Where did the cash come from?"), placeholder=t("e.g. ATM, Bank, Home savings"))
+        else:
+            place = st.text_input(t("Where was it spent?"), placeholder=t("e.g. Big Bazaar, Petrol pump, Medical store"))
         a, b = st.columns(2)
         amount = a.number_input(t("Amount (₹)"), min_value=0.0, step=100.0, format="%.2f")
         edate = b.date_input(t("Date"), value=date.today())
@@ -1591,7 +1699,10 @@ def expense_form():
             )
             st.success(tf("Expense of {a} at {p} saved.", a=inr(amount), p=place.strip()))
             st.toast(t("Expense saved"))
+            if final_cat == "Cash":
+                st.info(t("Cash saved. Open it under 'Cash spending' below and record where it was spent."))
             show_cash_left()
+    cash_spend_section()
 
 
 def loan_entry_form():
@@ -1918,7 +2029,7 @@ def wipe_all_data():
     """Saari tables ka poora data hata deta hai (ids bhi shuru se)."""
     with closing(sqlite3.connect(DB_PATH)) as c:
         c.execute("PRAGMA foreign_keys = ON")
-        for tbl in ("loan_payments", "loans", "followups", "txns", "parties", "income", "expenses"):
+        for tbl in ("cash_spends", "loan_payments", "loans", "followups", "txns", "parties", "income", "expenses"):
             c.execute(f"DELETE FROM {tbl}")
         c.execute("DELETE FROM sqlite_sequence")
         c.commit()
