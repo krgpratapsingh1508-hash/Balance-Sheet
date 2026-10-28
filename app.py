@@ -158,6 +158,12 @@ HI = {
     "Add first entry": "पहली एंट्री जोड़ें",
     "Your financial position as of {d}": "{d} तक आपकी आर्थिक स्थिति",
     "from {n} parties": "{n} पार्टियों से",
+    "from 1 party": "1 पार्टी से",
+    "to 1 party": "1 पार्टी को",
+    "1 entry, {last}": "1 एंट्री, {last}",
+    "Contact": "संपर्क",
+    "Call": "कॉल करें",
+    "No phone number saved for this party.": "इस पार्टी का फ़ोन नंबर सेव नहीं है।",
     "to {n} parties": "{n} पार्टियों को",
     "Net balance": "शुद्ध बैलेंस",
     "receivable − payable": "मिलना बाकी − देना बाकी",
@@ -854,7 +860,8 @@ def party_card(r, key):
     cls, label = status_of(r["balance"])
     cls, label = cls, t(label)
     last = tf("last entry {d}", d=r["last"]) if r["last"] else t("no entries yet")
-    meta = tf("{n} entries, {last}", n=r["entries"], last=last)
+    meta = (tf("1 entry, {last}", last=last) if r["entries"] == 1
+            else tf("{n} entries, {last}", n=r["entries"], last=last))
     with st.container(border=True):
         st.markdown(
             f'<div class="pcard-top">{avatar(r["name"])}<div>'
@@ -868,6 +875,17 @@ def party_card(r, key):
             t("Add entry"), key=key, use_container_width=True,
             on_click=go, args=(P_NEW, r["name"]),
         )
+        with st.expander(t("Contact")):
+            phone = r["phone"].strip() if isinstance(r["phone"], str) else ""
+            st.markdown(f'<div class="pname">{escape(r["name"])}</div>', unsafe_allow_html=True)
+            if phone:
+                digits = "".join(ch for ch in phone if ch.isdigit())
+                wa = ("91" + digits) if len(digits) == 10 else digits
+                st.markdown(f'<div class="pname" style="font-size:1.15rem">{t("Phone")}: {escape(phone)}</div>',
+                            unsafe_allow_html=True)
+                st.markdown(f"[📞 {t('Call')}](tel:{digits})  ·  [💬 WhatsApp](https://wa.me/{wa})")
+            else:
+                st.caption(t("No phone number saved for this party."))
 
 
 CF_COLS = ["Income", "Udhar diya", "Udhar wapas diya", "Kist", "Penalty", "Kharcha", "Wapas mile", "Udhar liya"]
@@ -1135,8 +1153,8 @@ def page_dashboard():
 
     this_month = inc.loc[inc["month"] == date.today().strftime("%Y-%m"), "amount"].sum()
     c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(kpi("Receivable", inr(milna), tf("from {n} parties", n=n_mil), "g"), unsafe_allow_html=True)
-    c2.markdown(kpi("Payable", inr(dena), tf("to {n} parties", n=n_den), "r"), unsafe_allow_html=True)
+    c1.markdown(kpi("Receivable", inr(milna), (tf("from 1 party") if n_mil == 1 else tf("from {n} parties", n=n_mil)), "g"), unsafe_allow_html=True)
+    c2.markdown(kpi("Payable", inr(dena), (tf("to 1 party") if n_den == 1 else tf("to {n} parties", n=n_den)), "r"), unsafe_allow_html=True)
     c3.markdown(
         kpi("Net balance", inr(milna - dena), "receivable − payable", "b"), unsafe_allow_html=True
     )
