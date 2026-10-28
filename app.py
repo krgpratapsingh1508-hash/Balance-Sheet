@@ -1054,28 +1054,34 @@ def followup_alerts():
             continue
         promise = _iso(f.promise_date) if (f is not None and f.mode == "date") else None
         set_on = _iso(f.set_on) if f is not None else None
-        # Alert comes on the entry's own return date. Entries without a return date never raise an alert.
+        # Alert comes on the entry's own return date and stays until the person presses OK.
+        # A date saved earlier ("When will they pay?") no longer hides it; it only adds a second alert on that date.
         for e in ents:
             e["due"], e["dated"] = e["own_due"], True
-            # A date chosen on an alert replaces the return date of the entries that were already due then
-            if promise and e["due"] and (set_on is None or e["due"] <= set_on):
-                e["due"] = promise
-        ents = [e for e in ents if e["due"]]
-        if not ents:
+        dated = [e for e in ents if e["due"]]
+        due_now = [e for e in dated if e["due"] <= today and (pid, e["due"].isoformat()) not in acked]
+        promise_hit = bool(promise and promise <= today and (pid, promise.isoformat()) not in acked)
+        # Keep the message box open while it is being used
+        if not due_now and not promise_hit and f"fu_txt_{pid}" not in st.session_state:
             continue
-        # Stays on screen from the return date until the person presses OK (or finishes the message)
-        due_now = [e for e in ents if e["due"] <= today and (pid, e["due"].isoformat()) not in acked]
-        # Hidden until a date arrives (but keep the message box open while it is being used)
-        if not due_now and f"fu_txt_{pid}" not in st.session_state:
-            continue
-        pick = min(due_now or ents, key=lambda e: e["due"])
+        if due_now:
+            pick = min(due_now, key=lambda e: e["due"])
+            due = pick["due"]
+        elif promise_hit:
+            pick, due = ents[0], promise
+        else:
+            pick = min(dated, key=lambda e: e["due"]) if dated else ents[0]
+            due = pick["due"] or today
+        keys = {e["due"].isoformat() for e in due_now}
+        if promise_hit:
+            keys.add(promise.isoformat())
         item.update(
-            since=pick["date"], days=(today - pick["date"]).days, dated=pick["dated"], due=pick["due"],
-            over=(today - pick["due"]).days,
+            since=pick["date"], days=(today - pick["date"]).days, dated=True, due=due,
+            over=(today - due).days,
             amt=sum(e["rem"] for e in due_now) if due_now else total,
-            keys=sorted({e["due"].isoformat() for e in due_now}),
+            keys=sorted(keys),
         )
-        if promise and pick["due"] == promise and promise < today:
+        if promise_hit:
             item["promise_passed"] = promise
         alerts.append(item)
     alerts.sort(key=lambda a: a["due"])
