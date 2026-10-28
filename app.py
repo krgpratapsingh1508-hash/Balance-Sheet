@@ -201,6 +201,28 @@ HI = {
     # expenses
     "Expenses: where the money went": "खर्च: पैसा कहाँ-कहाँ गया",
     "Period": "अवधि",
+    "Money in and out": "पैसा कितना आया और कितना गया",
+    "Money came in": "पैसा आया",
+    "Money went out": "पैसा गया",
+    "Left": "बचा",
+    "Left this month": "इस महीने बचा",
+    "In {a} · Out {b}": "आया {a} · गया {b}",
+    "came in − went out": "आया − गया",
+    "This month": "इस महीने",
+    "Last month": "पिछला महीना",
+    "Last 3 months": "पिछले 3 महीने",
+    "Last 6 months": "पिछले 6 महीने",
+    "Last 12 months": "पिछले 12 महीने",
+    "Choose a month": "कोई एक महीना चुनें",
+    "Choose a range": "महीनों की रेंज चुनें",
+    "From month": "शुरू का महीना",
+    "To month": "आखिरी महीना",
+    "'From month' is after 'To month'. Showing them in the right order.": "शुरू का महीना आखिरी महीने के बाद है। सही क्रम में दिखा रहे हैं।",
+    "Month by month": "महीने-दर-महीने",
+    "Came in": "आया",
+    "Went out": "गया",
+    "Came in: income {a}, repayments received {b}, borrowed {c}. Went out: lent {d}, repaid {e}, instalments {f}, penalties {g}, expenses {h}.":
+        "आया: आय {a}, वापस मिले {b}, उधार लिया {c}। गया: उधार दिया {d}, वापस दिया {e}, किस्तें {f}, जुर्माना {g}, खर्च {h}।",
     "All time": "पूरा समय",
     "No expenses in this period.": "इस अवधि में कोई खर्च नहीं है।",
     "Total expenses": "कुल खर्च",
@@ -1288,6 +1310,71 @@ def show_cash_left():
     st.caption(tf("Net cash position: {v}", v=inr(cash_total())))
 
 
+def _month_label(m):
+    y, mo = m.split("-")
+    return fdate(date(int(y), int(mo), 1), "%B %Y")
+
+
+PERIOD_OPTS = ["This month", "Last month", "Last 3 months", "Last 6 months", "Last 12 months",
+               "Choose a month", "Choose a range", "All time"]
+
+
+def period_cash_section():
+    """Kisi bhi mahine / kai mahine / range me: kitna paisa aaya, kitna gaya, kitna bacha."""
+    cf = cash_flow()
+    if cf.empty:
+        return
+    cur = pd.Period(date.today(), freq="M")
+    first = min(pd.Period(cf.index[0], freq="M"), cur)
+    last = max(pd.Period(cf.index[-1], freq="M"), cur)
+    all_m = [str(x) for x in pd.period_range(first, last, freq="M")]
+    st.subheader(t("Money in and out"))
+    pick = st.selectbox(t("Period"), PERIOD_OPTS, key="cf_period", format_func=t)
+    if pick == "This month":
+        sel = [str(cur)]
+    elif pick == "Last month":
+        sel = [str(cur - 1)]
+    elif pick.startswith("Last "):
+        n = int(pick.split()[1])
+        sel = [str(x) for x in pd.period_range(end=cur, periods=n, freq="M")]
+    elif pick == "Choose a month":
+        m = st.selectbox(t("Month"), all_m[::-1], key="cf_month", format_func=_month_label)
+        sel = [m]
+    elif pick == "Choose a range":
+        a, b = st.columns(2)
+        m1 = a.selectbox(t("From month"), all_m[::-1], index=min(2, len(all_m) - 1), key="cf_from", format_func=_month_label)
+        m2 = b.selectbox(t("To month"), all_m[::-1], key="cf_to", format_func=_month_label)
+        if m1 > m2:
+            st.warning(t("'From month' is after 'To month'. Showing them in the right order."))
+            m1, m2 = m2, m1
+        sel = [str(x) for x in pd.period_range(m1, m2, freq="M")]
+    else:
+        sel = all_m
+    v = cf.reindex(sel, fill_value=0.0)
+    came, went = float(v["Aaya"].sum()), float(v["Gaya"].sum())
+    left = came - went
+    label = _month_label(sel[0]) if len(sel) == 1 else f"{_month_label(sel[0])} – {_month_label(sel[-1])}"
+    k1, k2, k3 = st.columns(3)
+    k1.markdown(kpi("Money came in", inr(came), label, "g"), unsafe_allow_html=True)
+    k2.markdown(kpi("Money went out", inr(went), label, "r"), unsafe_allow_html=True)
+    k3.markdown(kpi("Left", inr(left), "came in − went out", "g" if left >= 0 else "r"), unsafe_allow_html=True)
+    st.caption(tf(
+        "Came in: income {a}, repayments received {b}, borrowed {c}. Went out: lent {d}, repaid {e}, instalments {f}, penalties {g}, expenses {h}.",
+        a=inr(v["Income"].sum()), b=inr(v["Wapas mile"].sum()), c=inr(v["Udhar liya"].sum()),
+        d=inr(v["Udhar diya"].sum()), e=inr(v["Udhar wapas diya"].sum()),
+        f=inr(v["Kist"].sum()), g=inr(v["Penalty"].sum()), h=inr(v["Kharcha"].sum()),
+    ))
+    if len(sel) > 1:
+        with st.expander(t("Month by month"), expanded=True):
+            tbl = pd.DataFrame({"Came in": v["Aaya"], "Went out": v["Gaya"], "Left": v["Bacha"]})
+            tbl.index = [_month_label(x) for x in tbl.index]
+            tbl = tbl.iloc[::-1].reset_index().rename(columns={"index": "Month"})
+            money = st.column_config.NumberColumn(format="₹%.2f")
+            show_df(tbl, hide_index=True, use_container_width=True,
+                    column_config={c: money for c in ["Came in", "Went out", "Left"]})
+    st.write("")
+
+
 def cash_section():
     cf = cash_flow()
     if cf.empty:
@@ -1523,12 +1610,18 @@ def page_dashboard():
     c3.markdown(
         kpi("Net balance", inr(milna - dena), "receivable − payable", "b"), unsafe_allow_html=True
     )
+    cf_now = cash_flow()
+    cm = date.today().strftime("%Y-%m")
+    m_in = float(cf_now.loc[cm, "Aaya"]) if cm in cf_now.index else 0.0
+    m_out = float(cf_now.loc[cm, "Gaya"]) if cm in cf_now.index else 0.0
     c4.markdown(
-        kpi("Income this month", inr(this_month), fdate(date.today(), "%B %Y"), "g"),
+        kpi("Left this month", inr(m_in - m_out), tf("In {a} · Out {b}", a=inr(m_in), b=inr(m_out)),
+            "g" if m_in >= m_out else "r"),
         unsafe_allow_html=True,
     )
     st.write("")
 
+    period_cash_section()
     cash_section()
     expense_section()
     loan_section()
