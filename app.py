@@ -35,6 +35,8 @@ LEGACY_KINDS = {
     "Maine paise wapas diye": "Repayment made",
 }
 
+MODES = ["Cash", "Online"]  # how the money moved
+
 INCOME_SOURCES = [
     "Salary", "Business", "Lottery", "Bonus", "Overtime", "Commission",
     "Rent", "Interest", "Gift", "Prize / Inaam", "Refund", "Other",
@@ -87,6 +89,15 @@ HI = {
     "Sign in": "साइन इन",
     "Incorrect password.": "गलत पासवर्ड।",
     "Language / भाषा": "Language / भाषा",
+    "Payment mode": "भुगतान का तरीका",
+    "Online": "ऑनलाइन",
+    "Mode": "तरीका",
+    "Not specified": "तय नहीं",
+    "Cash vs Online": "नकद बनाम ऑनलाइन",
+    "Cash left": "नकद बचा",
+    "Online left": "ऑनलाइन बचा",
+    "Entries saved before the payment mode was added show as Not specified. Edit them in the Admin panel.":
+        "पेमेंट मोड जुड़ने से पहले की एंट्रियाँ 'तय नहीं' दिखती हैं। उन्हें एडमिन पैनल में बदल सकते हैं।",
     # common labels
     "Amount": "राशि",
     "Amount (₹)": "राशि (₹)",
@@ -704,6 +715,20 @@ def hero(title, subtitle):
     )
 
 
+def mode_pick(current="", key=None):
+    """Cash / Online choice shown on every entry form."""
+    idx = MODES.index(current) if current in MODES else 0
+    return st.radio(t("Payment mode"), MODES, index=idx, horizontal=True, format_func=t, key=key)
+
+
+def _mode_of(r, df):
+    """Mode from a restored row; empty when the sheet has no mode column or the value is unknown."""
+    if "mode" not in df.columns:
+        return ""
+    m = str(r["mode"]).strip().capitalize()
+    return m if m in MODES else ""
+
+
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
@@ -799,6 +824,9 @@ def init_db():
         )
         if "due_date" not in [row[1] for row in c.execute("PRAGMA table_info(txns)")]:
             c.execute("ALTER TABLE txns ADD COLUMN due_date TEXT DEFAULT ''")
+        for tbl in ("txns", "income", "expenses", "loan_payments"):
+            if "mode" not in [row[1] for row in c.execute(f"PRAGMA table_info({tbl})")]:
+                c.execute(f"ALTER TABLE {tbl} ADD COLUMN mode TEXT DEFAULT ''")
         for old, new in LEGACY_KINDS.items():
             c.execute("UPDATE txns SET kind = ? WHERE kind = ?", (new, old))
         c.commit()
@@ -822,23 +850,24 @@ def parties_df():
 def txns_df():
     df = query_df(
         "SELECT t.id, t.party_id, p.name AS party, t.tdate AS date, t.kind, "
-        "t.amount, t.note, t.due_date FROM txns t JOIN parties p ON p.id = t.party_id "
+        "t.amount, t.note, t.due_date, t.mode FROM txns t JOIN parties p ON p.id = t.party_id "
         "ORDER BY t.tdate, t.id"
     )
     df["signed"] = df["amount"] * df["kind"].map(KINDS)
     df["due_date"] = df["due_date"].fillna("")
+    df["mode"] = df["mode"].fillna("")
     return df
 
 
 def income_df():
-    df = query_df("SELECT id, idate AS date, amount, source, note FROM income ORDER BY idate, id")
+    df = query_df("SELECT id, idate AS date, amount, source, note, COALESCE(mode, '') AS mode FROM income ORDER BY idate, id")
     df["month"] = df["date"].str[:7]
     return df
 
 
 def expenses_df():
     df = query_df(
-        "SELECT id, edate AS date, amount, place, category, note FROM expenses ORDER BY edate, id"
+        "SELECT id, edate AS date, amount, place, category, note, COALESCE(mode, '') AS mode FROM expenses ORDER BY edate, id"
     )
     df["month"] = df["date"].str[:7]
     return df
@@ -867,7 +896,7 @@ def loans_df():
 
 def loan_pay_df():
     return query_df(
-        "SELECT p.id, p.loan_id, l.name AS loan, p.pdate AS date, p.kind, p.amount, p.note "
+        "SELECT p.id, p.loan_id, l.name AS loan, p.pdate AS date, p.kind, p.amount, p.note, COALESCE(p.mode, '') AS mode "
         "FROM loan_payments p JOIN loans l ON l.id = p.loan_id ORDER BY p.pdate, p.id"
     )
 
@@ -1417,6 +1446,36 @@ def cash_section():
     st.write("")
 
 
+def mode_section():
+    """Cash in hand vs online / bank: how much came in and went out through each."""
+    df = all_transactions()
+    if df.empty:
+        return
+    df = df.assign(Mode=df["Mode"].replace("", "Not specified"))
+    g = df.pivot_table(index="Mode", columns="Direction", values="Amount", aggfunc="sum", fill_value=0.0)
+    for c in ("In", "Out"):
+        if c not in g.columns:
+            g[c] = 0.0
+    g["Left"] = g["In"] - g["Out"]
+    st.subheader(t("Cash vs Online"))
+    cols = st.columns(len(MODES))
+    for col, m in zip(cols, MODES):
+        i = float(g.loc[m, "In"]) if m in g.index else 0.0
+        o = float(g.loc[m, "Out"]) if m in g.index else 0.0
+        col.markdown(
+            kpi(m + " left", inr(i - o), tf("In {a} · Out {b}", a=inr(i), b=inr(o)), "g" if i >= o else "r"),
+            unsafe_allow_html=True,
+        )
+    if "Not specified" in g.index:
+        st.caption(t("Entries saved before the payment mode was added show as Not specified. Edit them in the Admin panel."))
+    with st.expander(t("Cash vs Online")):
+        tbl = g.reset_index()[["Mode", "In", "Out", "Left"]]
+        money = st.column_config.NumberColumn(format="₹%.2f")
+        show_df(tbl, hide_index=True, use_container_width=True,
+                column_config={c: money for c in ["In", "Out", "Left"]})
+    st.write("")
+
+
 def expense_section():
     ex = expenses_df()
     if ex.empty:
@@ -1480,9 +1539,9 @@ def expense_section():
         )
     with st.expander(t("All expense entries")):
         show_df(
-            v.sort_values(["date", "id"], ascending=False)[["date", "place", "category", "amount", "note"]]
+            v.sort_values(["date", "id"], ascending=False)[["date", "place", "category", "mode", "amount", "note"]]
             .rename(columns={"date": "Date", "place": "Place", "category": "Category",
-                             "amount": "Amount", "note": "Note"}),
+                             "amount": "Amount", "note": "Note", "mode": "Mode"}),
             hide_index=True, use_container_width=True,
             column_config={"Amount": st.column_config.NumberColumn(format="₹%.2f")},
         )
@@ -1623,6 +1682,7 @@ def page_dashboard():
 
     period_cash_section()
     cash_section()
+    mode_section()
     expense_section()
     loan_section()
 
@@ -1660,7 +1720,7 @@ def page_dashboard():
             pos = r["signed"] > 0
             st.markdown(
                 f'<div class="act"><div><div class="l">{escape(r["party"])}</div>'
-                f'<div class="s">{escape(t(r["kind"]))}, {r["date"]}</div></div>'
+                f'<div class="s">{escape(t(r["kind"]))}, {r["date"]}{(", " + escape(t(r["mode"]))) if r["mode"] else ""}</div></div>'
                 f'<div class="a {"pos" if pos else "neg"}">{"+" if pos else "−"}{inr(r["amount"])}</div></div>',
                 unsafe_allow_html=True,
             )
@@ -1694,6 +1754,7 @@ def income_form():
         a, b = st.columns(2)
         amount = a.number_input(t("Amount (₹)"), min_value=0.0, step=500.0, format="%.2f")
         idate = b.date_input(t("Date received"), value=date.today())
+        mode = mode_pick(key="inc_mode")
         note = st.text_input(t("Note (optional)"), placeholder=t("e.g. overtime, commission"))
         ok = st.form_submit_button(t("Save income"), type="primary", use_container_width=True)
     if ok:
@@ -1704,8 +1765,8 @@ def income_form():
             st.error(t("Specify the source when 'Other' is selected."))
         else:
             run(
-                "INSERT INTO income(idate, amount, source, note) VALUES (?,?,?,?)",
-                (idate.isoformat(), float(amount), final_source, note.strip()),
+                "INSERT INTO income(idate, amount, source, note, mode) VALUES (?,?,?,?,?)",
+                (idate.isoformat(), float(amount), final_source, note.strip(), mode),
             )
             st.success(tf("Income of {a} saved.", a=inr(amount)))
             st.toast(t("Income saved"))
@@ -1804,6 +1865,7 @@ def expense_form():
         a, b = st.columns(2)
         amount = a.number_input(t("Amount (₹)"), min_value=0.0, step=100.0, format="%.2f")
         edate = b.date_input(t("Date"), value=date.today())
+        mode = mode_pick(key="exp_mode")
         note = st.text_input(t("Note (optional)"), placeholder=t("e.g. monthly ration, bike petrol"))
         ok = st.form_submit_button(t("Save expense"), type="primary", use_container_width=True)
     if known:
@@ -1818,8 +1880,8 @@ def expense_form():
             st.error(t("Specify the category when 'Other' is selected."))
         else:
             run(
-                "INSERT INTO expenses(edate, amount, place, category, note) VALUES (?,?,?,?,?)",
-                (edate.isoformat(), float(amount), place.strip(), final_cat, note.strip()),
+                "INSERT INTO expenses(edate, amount, place, category, note, mode) VALUES (?,?,?,?,?,?)",
+                (edate.isoformat(), float(amount), place.strip(), final_cat, note.strip(), mode),
             )
             st.success(tf("Expense of {a} at {p} saved.", a=inr(amount), p=place.strip()))
             st.toast(t("Expense saved"))
@@ -1903,15 +1965,16 @@ def loan_entry_form():
             format="%.2f", key=f"lp_amt_{l['id']}",
         )
         pdate = b.date_input(t("Payment date"), value=date.today())
-        note = st.text_input(t("Note (optional)"), placeholder=t("e.g. online, cash"))
+        mode = mode_pick(key="lp_mode")
+        note = st.text_input(t("Note (optional)"), placeholder=t("e.g. receipt no., bank ref"))
         ok = st.form_submit_button(t("Save payment"), type="primary", use_container_width=True)
     if ok:
         if amount <= 0:
             st.error(t("Amount must be greater than 0."))
         else:
             run(
-                "INSERT INTO loan_payments(loan_id, pdate, kind, amount, note) VALUES (?,?,?,?,?)",
-                (int(l["id"]), pdate.isoformat(), "kist" if kind == "Instalment" else "penalty", float(amount), note.strip()),
+                "INSERT INTO loan_payments(loan_id, pdate, kind, amount, note, mode) VALUES (?,?,?,?,?,?)",
+                (int(l["id"]), pdate.isoformat(), "kist" if kind == "Instalment" else "penalty", float(amount), note.strip(), mode),
             )
             st.success(tf("{loan}: {kind} of {a} saved.", loan=pick, kind=t(kind).lower(), a=inr(amount)))
             st.toast(t("Payment saved"))
@@ -1979,6 +2042,7 @@ def page_new_entry():
             value=date.today() + timedelta(days=30),
             help=t("Used only for 'Money lent' and 'Money borrowed'. You get an alert when this date arrives."),
         )
+        mode = mode_pick(key="ent_mode")
         note = st.text_input(t("Note (optional)"), placeholder=t("e.g. shop supplies, wedding expenses"))
         submitted = st.form_submit_button(t("Save payment"), type="primary", use_container_width=True)
 
@@ -1995,9 +2059,9 @@ def page_new_entry():
         else:
             pid = get_or_create_party(name, phone)
             run(
-                "INSERT INTO txns(party_id, tdate, kind, amount, note, due_date) VALUES (?,?,?,?,?,?)",
+                "INSERT INTO txns(party_id, tdate, kind, amount, note, due_date, mode) VALUES (?,?,?,?,?,?,?)",
                 (pid, tdate.isoformat(), kind, float(amount), note.strip(),
-                 rdate.isoformat() if kind in DATED_KINDS else ""),
+                 rdate.isoformat() if kind in DATED_KINDS else "", mode),
             )
             st.session_state["entry_flash"] = tf("Entry saved: {a} with {n}.", a=inr(amount), n=name)
             st.session_state["entry_n"] = n + 1  # party/phone fields reset
@@ -2077,25 +2141,29 @@ def template_xlsx():
 
     ws1 = wb.active
     ws1.title = "Udhari"
-    make(ws1, ["party", "date", "kind", "amount", "note", "due_date"], [24, 14, 28, 14, 36, 14],
+    make(ws1, ["party", "date", "kind", "amount", "note", "due_date", "mode"], [24, 14, 28, 14, 36, 14, 12],
          date_cols=("date", "due_date"))
     dropdown(ws1, list(KINDS), "C2:C1000")
+    dropdown(ws1, MODES, "G2:G1000")
 
     ws2 = wb.create_sheet("Income")
-    make(ws2, ["date", "amount", "source", "note"], [14, 14, 24, 36])
+    make(ws2, ["date", "amount", "source", "note", "mode"], [14, 14, 24, 36, 12])
     dropdown(ws2, INCOME_SOURCES[:-1], "C2:C1000", strict=False)
+    dropdown(ws2, MODES, "E2:E1000")
 
     ws3 = wb.create_sheet("Loan")
     make(ws3, LOAN_COLS, [24, 16, 14, 14, 14, 14, 16, 30], date_cols=("first_due",))
     dropdown(ws3, list(LOAN_PEN_TYPES), "F2:F1000")
 
     ws4 = wb.create_sheet("Kist_Penalty")
-    make(ws4, PAY_COLS, [24, 14, 12, 14, 30])
+    make(ws4, PAY_COLS + ["mode"], [24, 14, 12, 14, 30, 12])
     dropdown(ws4, ["kist", "penalty"], "C2:C1000")
+    dropdown(ws4, MODES, "F2:F1000")
 
     ws6 = wb.create_sheet("Kharcha")
-    make(ws6, EXP_COLS, [14, 14, 28, 22, 36])
+    make(ws6, EXP_COLS + ["mode"], [14, 14, 28, 22, 36, 12])
     dropdown(ws6, EXPENSE_CATS[:-1], "D2:D1000", strict=False)
+    dropdown(ws6, MODES, "F2:F1000")
 
     ws7 = wb.create_sheet("Parties")
     make(ws7, PARTY_COLS, [28, 18], date_cols=("phone",))
@@ -2148,6 +2216,7 @@ def template_xlsx():
         ("amount -> amount paid", False),
         ("note   -> optional", False),
         ("", False),
+        ("mode -> optional on the Udhari, Income, Kharcha and Kist_Penalty sheets: Cash or Online", False),
         ("Exact duplicate rows are skipped, so restoring the same file twice is safe.", False),
     ]
     for text, bold in lines:
@@ -2201,14 +2270,14 @@ def backup_section():
         t("On Streamlit Cloud the database file can be lost when the app restarts. Download an Excel backup regularly.")
     )
     df = txns_df()
-    export = df[["party", "date", "kind", "amount", "note", "due_date"]]
+    export = df[["party", "date", "kind", "amount", "note", "due_date", "mode"]]
     inc = income_df()
-    inc_export = inc[["date", "amount", "source", "note"]]
+    inc_export = inc[["date", "amount", "source", "note", "mode"]]
     loans = loans_df()
     loan_export = loans[LOAN_COLS]
     pays = loan_pay_df()
-    pay_export = pays[PAY_COLS[:1] + PAY_COLS[1:]]
-    exp_export = expenses_df()[EXP_COLS]
+    pay_export = pays[PAY_COLS + ["mode"]]
+    exp_export = expenses_df()[EXP_COLS + ["mode"]]
     phones = parties_df()
     party_export = phones[["name", "phone"]].fillna("")
     cash_export = query_df(
@@ -2308,8 +2377,8 @@ def backup_section():
                     pid = get_or_create_party(str(r["party"]))
                     due = str(r["due_date"])[:10] if "due_date" in ud.columns and r["kind"] in DATED_KINDS else ""
                     run(
-                        "INSERT INTO txns(party_id, tdate, kind, amount, note, due_date) VALUES (?,?,?,?,?,?)",
-                        (pid, str(r["date"]), r["kind"], float(r["amount"]), str(r["note"]), due),
+                        "INSERT INTO txns(party_id, tdate, kind, amount, note, due_date, mode) VALUES (?,?,?,?,?,?,?)",
+                        (pid, str(r["date"]), r["kind"], float(r["amount"]), str(r["note"]), due, _mode_of(r, ud)),
                     )
                     seen.add(key)
                     added += 1
@@ -2326,8 +2395,8 @@ def backup_section():
                     if key in have:
                         skipped += 1
                         continue
-                    run("INSERT INTO income(idate, amount, source, note) VALUES (?,?,?,?)",
-                        (key[0], float(r["amount"]), key[2], key[3]))
+                    run("INSERT INTO income(idate, amount, source, note, mode) VALUES (?,?,?,?,?)",
+                        (key[0], float(r["amount"]), key[2], key[3], _mode_of(r, ic)))
                     have.add(key)
                     added += 1
                 msgs.append(tf("Income: {a} entries added, {s} already present.", a=added, s=skipped))
@@ -2356,8 +2425,8 @@ def backup_section():
                         skipped += 1
                         continue
                     run(
-                        "INSERT INTO expenses(edate, amount, place, category, note) VALUES (?,?,?,?,?)",
-                        (key[0], amt, pl, str(r["category"]).strip() or "Other", key[3]),
+                        "INSERT INTO expenses(edate, amount, place, category, note, mode) VALUES (?,?,?,?,?,?)",
+                        (key[0], amt, pl, str(r["category"]).strip() or "Other", key[3], _mode_of(r, ke)),
                     )
                     have.add(key)
                     added += 1
@@ -2463,8 +2532,8 @@ def backup_section():
                         skipped += 1
                         continue
                     run(
-                        "INSERT INTO loan_payments(loan_id, pdate, kind, amount, note) VALUES (?,?,?,?,?)",
-                        (ids[nm], key[1], kind, amt, key[4]),
+                        "INSERT INTO loan_payments(loan_id, pdate, kind, amount, note, mode) VALUES (?,?,?,?,?,?)",
+                        (ids[nm], key[1], kind, amt, key[4], _mode_of(r, kp)),
                     )
                     have.add(key)
                     added += 1
@@ -2581,6 +2650,7 @@ def edit_txns():
         a, b = st.columns(2)
         amount = a.number_input(t("Amount (₹)"), min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
         tdate = b.date_input(t("Date"), value=_d(r["date"]))
+        mode = mode_pick(r.get("mode", ""), key=f"edit_txn_mode_{rid}")
         rdate = st.date_input(
             t("Return date (lent: when they will return it, borrowed: when you will return it)"),
             value=_iso(r["due_date"]) or (date.today() + timedelta(days=30)),
@@ -2606,9 +2676,9 @@ def edit_txns():
             if not moving_to_saved:
                 run("UPDATE parties SET phone = ? WHERE id = ?", (phone.strip(), pid))
             run(
-                "UPDATE txns SET party_id=?, tdate=?, kind=?, amount=?, note=?, due_date=? WHERE id=?",
+                "UPDATE txns SET party_id=?, tdate=?, kind=?, amount=?, note=?, due_date=?, mode=? WHERE id=?",
                 (pid, tdate.isoformat(), kind, float(amount), note.strip(),
-                 rdate.isoformat() if kind in DATED_KINDS else "", int(rid)),
+                 rdate.isoformat() if kind in DATED_KINDS else "", mode, int(rid)),
             )
             cleanup_parties()
             st.session_state["flash"] = "Entry updated."
@@ -2644,6 +2714,7 @@ def edit_income():
         a, b = st.columns(2)
         amount = a.number_input(t("Amount (₹)"), min_value=0.0, value=float(r["amount"]), step=500.0, format="%.2f")
         idate = b.date_input(t("Date received"), value=_d(r["date"]))
+        mode = mode_pick(r.get("mode", ""), key=f"edit_inc_mode_{rid}")
         note = st.text_input(t("Note (optional)"), value=r["note"] or "")
         ok = st.form_submit_button(t("Save changes"), type="primary", use_container_width=True)
     if ok:
@@ -2654,8 +2725,8 @@ def edit_income():
             st.error(t("Specify the source when 'Other' is selected."))
         else:
             run(
-                "UPDATE income SET idate=?, amount=?, source=?, note=? WHERE id=?",
-                (idate.isoformat(), float(amount), source, note.strip(), int(rid)),
+                "UPDATE income SET idate=?, amount=?, source=?, note=?, mode=? WHERE id=?",
+                (idate.isoformat(), float(amount), source, note.strip(), mode, int(rid)),
             )
             st.session_state["flash"] = "Income entry updated."
             st.rerun()
@@ -2693,6 +2764,7 @@ def edit_expenses():
         a, b = st.columns(2)
         amount = a.number_input(t("Amount (₹)"), min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
         edate = b.date_input(t("Date"), value=_d(r["date"]))
+        mode = mode_pick(r.get("mode", ""), key=f"edit_exp_mode_{rid}")
         note = st.text_input(t("Note (optional)"), value=r["note"] or "")
         ok = st.form_submit_button(t("Save changes"), type="primary", use_container_width=True)
     if ok:
@@ -2702,8 +2774,8 @@ def edit_expenses():
             st.error(t("Amount must be greater than 0."))
         else:
             run(
-                "UPDATE expenses SET edate=?, amount=?, place=?, category=?, note=? WHERE id=?",
-                (edate.isoformat(), float(amount), place.strip(), cat, note.strip(), int(rid)),
+                "UPDATE expenses SET edate=?, amount=?, place=?, category=?, note=?, mode=? WHERE id=?",
+                (edate.isoformat(), float(amount), place.strip(), cat, note.strip(), mode, int(rid)),
             )
             st.session_state["flash"] = "Expense updated."
             st.rerun()
@@ -2785,6 +2857,7 @@ def edit_loan_payments():
         a, b = st.columns(2)
         amount = a.number_input(t("Amount (₹)"), min_value=0.0, value=float(r["amount"]), step=100.0, format="%.2f")
         pdate = b.date_input(t("Payment date"), value=_d(r["date"]))
+        mode = mode_pick(r.get("mode", ""), key=f"edit_pay_mode_{rid}")
         note = st.text_input(t("Note (optional)"), value=r["note"] or "")
         ok = st.form_submit_button(t("Save changes"), type="primary", use_container_width=True)
     if ok:
@@ -2792,8 +2865,8 @@ def edit_loan_payments():
             st.error(t("Amount must be greater than 0."))
         else:
             run(
-                "UPDATE loan_payments SET loan_id=?, pdate=?, kind=?, amount=?, note=? WHERE id=?",
-                (loan_ids[loan], pdate.isoformat(), kind, float(amount), note.strip(), int(rid)),
+                "UPDATE loan_payments SET loan_id=?, pdate=?, kind=?, amount=?, note=?, mode=? WHERE id=?",
+                (loan_ids[loan], pdate.isoformat(), kind, float(amount), note.strip(), mode, int(rid)),
             )
             st.session_state["flash"] = "Payment updated."
             st.rerun()
@@ -2809,25 +2882,25 @@ def all_transactions():
     for r in txns_df().itertuples():
         rows.append({
             "Date": r.date, "Group": "Lending / borrowing", "Type": r.kind, "Party / loan": r.party,
-            "Direction": "In" if r.kind in IN_KINDS else "Out", "Amount": float(r.amount), "Note": r.note or "",
+            "Mode": r.mode or "", "Direction": "In" if r.kind in IN_KINDS else "Out", "Amount": float(r.amount), "Note": r.note or "",
         })
     for r in income_df().itertuples():
         rows.append({
             "Date": r.date, "Group": "Income", "Type": "Income", "Party / loan": r.source,
-            "Direction": "In", "Amount": float(r.amount), "Note": r.note or "",
+            "Mode": r.mode or "", "Direction": "In", "Amount": float(r.amount), "Note": r.note or "",
         })
     for r in expenses_df().itertuples():
         rows.append({
             "Date": r.date, "Group": "Expenses", "Type": r.category, "Party / loan": r.place,
-            "Direction": "Out", "Amount": float(r.amount), "Note": r.note or "",
+            "Mode": r.mode or "", "Direction": "Out", "Amount": float(r.amount), "Note": r.note or "",
         })
     for r in loan_pay_df().itertuples():
         rows.append({
             "Date": r.date, "Group": "Loan payments",
             "Type": "Instalment" if r.kind == "kist" else "Penalty", "Party / loan": r.loan,
-            "Direction": "Out", "Amount": float(r.amount), "Note": r.note or "",
+            "Mode": r.mode or "", "Direction": "Out", "Amount": float(r.amount), "Note": r.note or "",
         })
-    cols = ["Date", "Group", "Type", "Party / loan", "Direction", "Amount", "Note"]
+    cols = ["Date", "Group", "Type", "Party / loan", "Mode", "Direction", "Amount", "Note"]
     df = pd.DataFrame(rows, columns=cols)
     return df.sort_values("Date", ascending=False, kind="stable").reset_index(drop=True)
 
@@ -2837,12 +2910,15 @@ def admin_transactions():
     if df.empty:
         st.info(t("No transactions yet."))
         return
-    f1, f2 = st.columns([1, 2])
+    f1, f3, f2 = st.columns([1, 1, 2])
     group = f1.selectbox(t("Show"), ["All", "Lending / borrowing", "Income", "Expenses", "Loan payments"],
                          key="adm_group", format_func=t)
+    mode_f = f3.selectbox(t("Payment mode"), ["All"] + MODES, key="adm_mode", format_func=t)
     q = f2.text_input(t("Search party, loan or note"), key="adm_q")
     if group != "All":
         df = df[df["Group"] == group]
+    if mode_f != "All":
+        df = df[df["Mode"] == mode_f]
     if q.strip():
         s = q.strip()
         mask = (
