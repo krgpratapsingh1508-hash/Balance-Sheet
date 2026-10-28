@@ -1,4 +1,4 @@
-"""Udhari Khata - personal ledger for lending, borrowing, income and loan instalments.
+"""Balance Sheet - personal ledger for lending, borrowing, income and loan instalments.
 
 Three pages: Dashboard, New entry, Admin panel (Edit records, Backup & restore are inside it, behind the password).
 """
@@ -76,7 +76,7 @@ EN_FIX = {
 
 HI = {
     # brand, pages, navigation
-    "Udhari Khata": "उधारी खाता",
+    "Balance Sheet": "बैलेंस शीट",
     "Personal ledger": "निजी लेन-देन खाता",
     "Dashboard": "डैशबोर्ड",
     "New entry": "नई एंट्री",
@@ -554,7 +554,7 @@ def language_picker():
         st.rerun()
 
 
-st.set_page_config(page_title="Udhari Khata", page_icon="📒", layout="wide")
+st.set_page_config(page_title="Balance Sheet", page_icon="📒", layout="wide")
 
 CSS = """
 <style>
@@ -930,7 +930,7 @@ def check_password():
         return True
     _, mid, _ = st.columns([1, 1.2, 1])
     with mid:
-        hero("Udhari Khata", "Sign in to access your ledger.")
+        hero("Balance Sheet", "Sign in to access your ledger.")
         with st.form("login"):
             entered = st.text_input(t("Password"), type="password")
             ok = st.form_submit_button(t("Sign in"), use_container_width=True, type="primary")
@@ -2153,7 +2153,7 @@ def backup_section():
                 "Parties": party_export, "Cash_Kharch": cash_export,
                 "Followup": follow_export,
             }),
-            file_name=f"udhari_backup_{date.today().isoformat()}.xlsx",
+            file_name=f"balance_sheet_backup_{date.today().isoformat()}.xlsx",
             mime=XLSX_MIME, disabled=empty, type="primary",
         )
     with c2:
@@ -2161,7 +2161,7 @@ def backup_section():
         st.download_button(
             t("Download blank restore template"),
             template_xlsx(),
-            file_name="udhari_restore_format.xlsx",
+            file_name="balance_sheet_restore_format.xlsx",
             mime=XLSX_MIME,
             help=t("Fill in this template and upload it below. The Instructions sheet explains each column."),
         )
@@ -2812,7 +2812,7 @@ def main():
         return
     if "page" not in st.session_state or st.session_state["page"] not in PAGES:
         st.session_state["page"] = P_DASH
-    st.sidebar.markdown(f'<div class="brand">{t("Udhari Khata")}</div>', unsafe_allow_html=True)
+    st.sidebar.markdown(f'<div class="brand">{t("Balance Sheet")}</div>', unsafe_allow_html=True)
     st.sidebar.caption(t("Personal ledger"))
     st.sidebar.radio(t("Menu"), PAGES, key="page", label_visibility="collapsed", format_func=t)
 
