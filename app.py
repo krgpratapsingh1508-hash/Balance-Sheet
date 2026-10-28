@@ -710,7 +710,36 @@ section[data-testid="stSidebar"] .brand {
 div[data-testid="stForm"] { border-radius: 6px; }
 .stButton > button, .stDownloadButton > button { border-radius: 4px; font-weight: 500; }
 :focus-visible { outline: 2px solid #0f3d4c; outline-offset: 2px; }
+/* Easy tapping: big buttons, big pill choices, roomy inputs */
+.stButton > button, .stDownloadButton > button, .stLinkButton > a,
+div[data-testid="stFormSubmitButton"] > button {
+    min-height: 3.2rem; font-size: 1.05rem; padding: 0.6rem 1.1rem; border-radius: 10px;
+}
+.stButton > button:active, div[data-testid="stFormSubmitButton"] > button:active { transform: scale(0.98); }
+div[role="radiogroup"] { gap: 0.5rem !important; flex-wrap: wrap; }
+div[role="radiogroup"] > label {
+    min-height: 3rem; padding: 0.55rem 1rem; border: 1.5px solid #cdd5db; border-radius: 10px;
+    background: #fff; cursor: pointer; align-items: center; font-size: 1.02rem;
+}
+div[role="radiogroup"] > label:hover { border-color: #0f3d4c; background: #f1f6f8; }
+div[role="radiogroup"] > label:has(input:checked) {
+    background: #0f3d4c; border-color: #0f3d4c;
+}
+div[role="radiogroup"] > label:has(input:checked) * { color: #fff !important; }
+div[data-baseweb="select"] > div, div[data-baseweb="input"] > div, div[data-baseweb="base-input"] {
+    min-height: 3rem; font-size: 1.02rem;
+}
+div[data-testid="stNumberInput"] button { min-width: 2.6rem; }
+div[data-testid="stExpander"] summary { padding: 0.9rem 0.8rem; font-size: 1.02rem; }
+label[data-baseweb="checkbox"] { min-height: 2.8rem; align-items: center; }
+section[data-testid="stSidebar"] div[role="radiogroup"] > label { width: 100%; }
+@media (max-width: 640px) {
+    .block-container { padding-left: 0.8rem; padding-right: 0.8rem; }
+    .hero { padding: 16px 18px; }
+    .kpi .val { font-size: 1.5rem; }
+}
 </style>
+
 """
 
 
@@ -1047,6 +1076,20 @@ def go(page, party=None):
     st.session_state["page"] = page
     if party is not None:
         st.session_state["prefill_party"] = party
+
+
+PAGE_ICONS = {P_DASH: "📊", P_SAVE: "💰", P_NEW: "➕", P_EDIT: "⚙️"}
+
+
+def top_nav():
+    """Big tap-friendly page buttons at the top, so the sidebar is not needed."""
+    cols = st.columns(len(PAGES))
+    for col, p in zip(cols, PAGES):
+        col.button(
+            f"{PAGE_ICONS[p]} {t(p)}", key=f"nav_{p}", on_click=go, args=(p,),
+            use_container_width=True,
+            type="primary" if st.session_state.get("page") == p else "secondary",
+        )
 
 
 # ---------------------------------------------------------------- follow-up alerts
@@ -3208,6 +3251,7 @@ def main():
     st.sidebar.caption(t("Personal ledger"))
     st.sidebar.radio(t("Menu"), PAGES, key="page", label_visibility="collapsed", format_func=t)
 
+    top_nav()
     n_follow = len(followup_alerts()[0])
     if n_follow:
         st.sidebar.warning("⏰ " + tf("{n} follow-up(s) pending", n=n_follow))
