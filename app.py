@@ -648,9 +648,9 @@ st.set_page_config(page_title="Balance Sheet", page_icon="📒", layout="wide",
 
 CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:wght@600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:wght@600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap');
 
-.stApp { font-family: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif; }
+.stApp { font-family: 'IBM Plex Sans', 'Noto Sans Devanagari', system-ui, -apple-system, 'Segoe UI', sans-serif; }
 h1, h2, h3, h4 {
     font-family: 'Source Serif 4', Georgia, serif !important;
     font-weight: 600 !important; letter-spacing: -0.01em; color: #14202b;
@@ -748,6 +748,68 @@ section[data-testid="stSidebar"] div[role="radiogroup"] > label { width: 100%; }
     .hero { padding: 16px 18px; }
     .kpi .val { font-size: 1.5rem; }
 }
+
+/* ===== Bada, saaf aur sundar text (poore app / admin panel me) ===== */
+.stApp { line-height: 1.6; }
+.stMarkdown p, .stMarkdown li { font-size: 1.05rem; line-height: 1.65; }
+
+/* chhota chhota (caption) likha hua: bada, gehra rang, padhne me aasan */
+div[data-testid="stCaptionContainer"], div[data-testid="stCaptionContainer"] p,
+.stCaption, small {
+    font-size: 1.02rem !important; line-height: 1.6 !important;
+    color: #3d4b57 !important; font-weight: 500;
+}
+
+/* har input / choice ka title */
+label[data-testid="stWidgetLabel"] p, div[data-testid="stWidgetLabel"] p {
+    font-size: 1.05rem !important; font-weight: 600 !important; color: #14202b !important;
+}
+
+/* radio ko sundar 'pill / tab' jaisa banao (gol button chhupa kar) */
+div[role="radiogroup"] { gap: 0.6rem !important; }
+div[role="radiogroup"] > label {
+    min-height: 3.1rem; padding: 0.5rem 1.2rem; border-radius: 999px;
+    border: 1.5px solid #c3ced6; background: #fff;
+    box-shadow: 0 1px 2px rgba(15,61,76,.08); transition: all .15s ease;
+}
+div[role="radiogroup"] > label > div:first-child { display: none !important; }
+div[role="radiogroup"] > label p, div[role="radiogroup"] > label div {
+    font-size: 1.1rem !important; font-weight: 500; line-height: 1.4;
+}
+div[role="radiogroup"] > label:hover {
+    border-color: #0f3d4c; background: #eef5f8; transform: translateY(-1px);
+    box-shadow: 0 3px 8px rgba(15,61,76,.15);
+}
+div[role="radiogroup"] > label:has(input:checked) {
+    background: linear-gradient(135deg, #0f3d4c, #1b5a6e); border-color: #0f3d4c;
+    box-shadow: 0 3px 10px rgba(15,61,76,.35);
+}
+div[role="radiogroup"] > label:has(input:checked) p,
+div[role="radiogroup"] > label:has(input:checked) div { font-weight: 600 !important; }
+
+/* upar ke bade menu buttons */
+.stButton > button { font-size: 1.15rem !important; font-weight: 600; border: 1.5px solid #c3ced6;
+    box-shadow: 0 1px 3px rgba(15,61,76,.10); transition: all .15s ease; }
+.stButton > button p { font-size: 1.15rem !important; font-weight: 600; }
+.stButton > button:hover { border-color: #0f3d4c; box-shadow: 0 4px 12px rgba(15,61,76,.18); transform: translateY(-1px); }
+.stButton > button[kind="primary"] { background: linear-gradient(135deg, #0f3d4c, #1b5a6e);
+    border-color: #0f3d4c; color: #fff; box-shadow: 0 4px 12px rgba(15,61,76,.30); }
+
+/* sandesh (info / warning / success / error) ka text */
+div[data-testid="stAlert"] p { font-size: 1.05rem !important; line-height: 1.6; }
+div[data-testid="stAlert"] { border-radius: 10px; }
+
+/* expander, tab, metric */
+div[data-testid="stExpander"] summary p { font-size: 1.08rem !important; font-weight: 600; }
+button[data-baseweb="tab"] p { font-size: 1.08rem !important; font-weight: 600; }
+div[data-testid="stMetricLabel"] p { font-size: 1rem !important; font-weight: 600; color: #3d4b57; }
+div[data-testid="stMetricValue"] { font-size: 1.7rem !important; }
+h4 { font-size: 1.25rem !important; margin-top: .4rem; }
+
+/* kharche / kpi / card ke chhote text */
+.kpi .lbl { font-size: .95rem; } .kpi .sub { font-size: .9rem; }
+.pmeta { font-size: .9rem; } .act .s { font-size: .88rem; } .chip { font-size: .85rem; }
+.hero p { font-size: 1.05rem; }
 </style>
 
 """
