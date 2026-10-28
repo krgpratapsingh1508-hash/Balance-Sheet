@@ -2770,34 +2770,15 @@ def backup_section():
         )
         st.download_button(
             t("Download Excel backup"),
-            to_xlsx_multi({
-                "Udhari": export, "Income": inc_export,
-                "Loan": loan_export, "Kist_Penalty": pay_export,
-                "Kharcha": exp_export,
-                "Parties": party_export, "Cash_Kharch": cash_export,
-                "Followup": follow_export,
-            }),
-            file_name=f"balance_sheet_backup_{date.today().isoformat()}.xlsx",
-            mime=XLSX_MIME, disabled=empty, type="primary",
-        )
-        st.download_button(
-            t("Download master backup (one sheet)"),
             to_xlsx_multi({MASTER_SHEET: master_export}),
-            file_name=f"balance_sheet_master_{date.today().isoformat()}.xlsx",
-            mime=XLSX_MIME, disabled=master_export.empty,
+            file_name=f"balance_sheet_master_backup_{date.today().isoformat()}.xlsx",
+            mime=XLSX_MIME, disabled=master_export.empty, type="primary",
             help=t("All records on a single 'Master' sheet. It can be restored directly."),
         )
     with c2:
         st.markdown(t("#### Restore"))
         st.download_button(
             t("Download blank restore template"),
-            template_xlsx(),
-            file_name="balance_sheet_restore_format.xlsx",
-            mime=XLSX_MIME,
-            help=t("Fill in this template and upload it below. The Instructions sheet explains each column."),
-        )
-        st.download_button(
-            t("Download master restore template (one sheet)"),
             master_template_xlsx(),
             file_name="balance_sheet_master_restore_format.xlsx",
             mime=XLSX_MIME,
