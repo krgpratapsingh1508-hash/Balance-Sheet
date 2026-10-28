@@ -433,6 +433,7 @@ HI = {
     "No return date": "वापसी की तारीख नहीं (अलर्ट नहीं आएगा)",
     "After sending, press Done to clear this alert.": "संदेश भेजने के बाद 'Done' दबाएँ, तब यह अलर्ट हटेगा।",
     "OK, I have seen this": "ठीक है, मैंने देख लिया",
+    "Open the Dashboard to see them.": "देखने के लिए Dashboard खोलें।",
     "In {n} days": "{n} दिन बाद",
     "Party": "पार्टी",
     "Entry date": "एंट्री की तारीख",
@@ -2810,6 +2811,11 @@ def main():
     n_follow = len(followup_alerts()[0])
     if n_follow:
         st.sidebar.warning("⏰ " + tf("{n} follow-up(s) pending", n=n_follow))
+        if st.session_state["page"] != P_DASH:
+            st.warning("⏰ " + tf("{n} follow-up(s) pending", n=n_follow) + " — " + t("Open the Dashboard to see them."))
+        if not st.session_state.get("alert_toast_done"):
+            st.session_state["alert_toast_done"] = True
+            st.toast("⏰ " + tf("{n} follow-up(s) pending", n=n_follow))
 
     s = summary_df()
     if not s.empty and s["entries"].sum() > 0:
