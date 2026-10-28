@@ -401,6 +401,12 @@ HI = {
     "{p} parties, {n} entries": "{p} पार्टियाँ, {n} एंट्रियाँ",
     # follow-up alerts
     "Follow-ups": "फ़ॉलो-अप",
+    "Return dates of unpaid entries": "बाकी एंट्रियों की वापसी की तारीखें",
+    "No return date": "वापसी की तारीख नहीं",
+    "In {n} days": "{n} दिन बाद",
+    "Party": "पार्टी",
+    "Entry date": "एंट्री की तारीख",
+    "Return date": "वापसी की तारीख",
     "{name} was to return {amt} to you on {due}.": "{name} को {due} तक आपके {amt} लौटाने थे।",
     "You were to return {amt} to {name} on {due}.": "आपको {due} तक {name} के {amt} लौटाने थे।",
     "{n} days overdue": "{n} दिन की देर",
@@ -1095,6 +1101,42 @@ def followup_section():
         st.write("")
 
 
+def return_dates_section():
+    """List of every unpaid entry with its return date, so it is clear what the alerts are based on."""
+    s = summary_df()
+    if s.empty:
+        return
+    df = txns_df()
+    today = date.today()
+    rows = []
+    for r in s.itertuples():
+        if abs(r.balance) < 0.005:
+            continue
+        sign = 1 if r.balance > 0 else -1
+        for e in open_entries(df[df["party_id"] == int(r.id)], sign):
+            due = e["own_due"]
+            if due is None:
+                status = t("No return date")
+            elif due < today:
+                status = tf("{n} days overdue", n=(today - due).days)
+            elif due == today:
+                status = t("Due today")
+            else:
+                status = tf("In {n} days", n=(due - today).days)
+            rows.append({
+                "sort": due or date.max, "Party": r.name, "Type": "Receivable" if sign > 0 else "Payable",
+                "Amount": e["rem"], "Entry date": e["date"].isoformat() if e["date"] else "",
+                "Return date": due.isoformat() if due else "—", "Status": status,
+            })
+    if not rows:
+        return
+    rows.sort(key=lambda x: x["sort"])
+    tbl = pd.DataFrame(rows).drop(columns=["sort"])
+    with st.expander("📅 " + t("Return dates of unpaid entries")):
+        show_df(tbl, hide_index=True, use_container_width=True,
+                column_config={"Amount": st.column_config.NumberColumn(format="₹%.2f")})
+
+
 # ---------------------------------------------------------------- pages
 def contact_block(r):
     phone = r["phone"].strip() if isinstance(r["phone"], str) else ""
@@ -1395,6 +1437,7 @@ def page_dashboard():
         return
 
     followup_section()
+    return_dates_section()
 
     s = summary_df()
     milna = s.loc[s["balance"] > 0, "balance"].sum()
