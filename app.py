@@ -433,8 +433,16 @@ HI = {
         "यह टेम्पलेट भरकर नीचे अपलोड करें। Instructions शीट में हर कॉलम समझाया गया है।",
     "Select a backup file": "बैकअप फ़ाइल चुनें",
     "Restore": "रिस्टोर करें",
-    "The file must contain at least one of these sheets: Udhari, Income, Loan, Kist_Penalty, Kharcha, Parties, Cash_Kharch, Followup.":
-        "फ़ाइल में इन शीट्स में से कम से कम एक होनी चाहिए: Udhari, Income, Loan, Kist_Penalty, Kharcha, Parties, Cash_Kharch, Followup।",
+    "Download master backup (one sheet)": "मास्टर बैकअप डाउनलोड करें (एक शीट)",
+    "All records on a single 'Master' sheet. It can be restored directly.":
+        "सारे रिकॉर्ड एक ही 'Master' शीट में। इसे सीधे रिस्टोर किया जा सकता है।",
+    "Download master restore template (one sheet)": "मास्टर रिस्टोर टेम्पलेट डाउनलोड करें (एक शीट)",
+    "One sheet holds everything. The 'type' column says what each row is. See the Instructions sheet.":
+        "एक ही शीट में सब कुछ। 'type' कॉलम बताता है कि हर पंक्ति क्या है। Instructions शीट देखें।",
+    "Master sheet: {n} rows skipped because the 'type' value was not recognised.":
+        "Master शीट: {n} पंक्तियाँ छोड़ी गईं क्योंकि 'type' पहचाना नहीं गया।",
+    "The file must contain at least one of these sheets: Master, Udhari, Income, Loan, Kist_Penalty, Kharcha, Parties, Cash_Kharch, Followup.":
+        "फ़ाइल में इन शीट्स में से कम से कम एक होनी चाहिए: Master, Udhari, Income, Loan, Kist_Penalty, Kharcha, Parties, Cash_Kharch, Followup।",
     "The Parties sheet must have these columns: ": "Parties शीट में ये कॉलम होने चाहिए: ",
     "The Cash_Kharch sheet must have these columns: ": "Cash_Kharch शीट में ये कॉलम होने चाहिए: ",
     "The Followup sheet must have these columns: ": "Followup शीट में ये कॉलम होने चाहिए: ",
@@ -2347,6 +2355,175 @@ PARTY_COLS = ["name", "phone"]
 CASH_COLS = ["cash_date", "cash_amount", "cash_place", "date", "amount", "place", "note"]
 FOLLOW_COLS = ["party", "mode", "promise_date", "set_on"]
 
+# ---------------------------------------------------------------- master sheet (ek hi sheet me sab kuch)
+MASTER_SHEET = "Master"
+MASTER_COLS = [
+    "type", "date", "name", "kind", "amount", "category", "place", "note", "mode", "due_date", "phone",
+    "loan_amount", "kist_amount", "total_kists", "first_due", "penalty_type", "penalty_amount",
+    "cash_date", "cash_amount", "cash_place", "followup_mode", "promise_date", "set_on",
+]
+# type -> {master column: column of the normal sheet}
+MASTER_MAP = {
+    "Udhari": {"name": "party", "date": "date", "kind": "kind", "amount": "amount", "note": "note",
+               "due_date": "due_date", "mode": "mode"},
+    "Income": {"date": "date", "amount": "amount", "category": "source", "note": "note", "mode": "mode"},
+    "Kharcha": {"date": "date", "amount": "amount", "place": "place", "category": "category",
+                "note": "note", "mode": "mode"},
+    "Loan": {"name": "name", "loan_amount": "loan_amount", "kist_amount": "kist_amount",
+             "total_kists": "total_kists", "first_due": "first_due", "penalty_type": "penalty_type",
+             "penalty_amount": "penalty_amount", "note": "note"},
+    "Kist_Penalty": {"name": "loan", "date": "date", "kind": "kind", "amount": "amount", "note": "note",
+                     "mode": "mode"},
+    "Parties": {"name": "name", "phone": "phone"},
+    "Cash_Kharch": {"cash_date": "cash_date", "cash_amount": "cash_amount", "cash_place": "cash_place",
+                    "date": "date", "amount": "amount", "place": "place", "note": "note"},
+    "Followup": {"name": "party", "followup_mode": "mode", "promise_date": "promise_date", "set_on": "set_on"},
+}
+MASTER_ALIASES = {
+    "udhari": "Udhari", "income": "Income", "kharcha": "Kharcha", "expense": "Kharcha",
+    "loan": "Loan", "kist_penalty": "Kist_Penalty", "party": "Parties", "parties": "Parties",
+    "cash_kharch": "Cash_Kharch", "followup": "Followup", "follow_up": "Followup",
+}
+
+
+def to_master(sheets):
+    """{sheet: DataFrame} ko ek hi 'Master' DataFrame me badalta hai (type column batata hai ki row kis cheez ki hai)."""
+    parts = []
+    for sh, mp in MASTER_MAP.items():
+        df = sheets.get(sh)
+        if df is None or len(df) == 0:
+            continue
+        df = df.reset_index(drop=True)
+        out = pd.DataFrame({mc: (df[sc] if sc in df.columns else "") for mc, sc in mp.items()})
+        out.insert(0, "type", sh)
+        parts.append(out)
+    if not parts:
+        return pd.DataFrame(columns=MASTER_COLS)
+    return pd.concat(parts, ignore_index=True).reindex(columns=MASTER_COLS).fillna("")
+
+
+def from_master(m):
+    """Master DataFrame ko wapas normal sheets me todta hai. Returns (sheets, unrecognised_rows)."""
+    out = {k: None for k in SHEETS}
+    m = m.copy()
+    for c in MASTER_COLS:
+        if c not in m.columns:
+            m[c] = ""
+    key = m["type"].astype(str).str.strip().str.lower().str.replace(r"[\s-]+", "_", regex=True)
+    kind_of = key.map(MASTER_ALIASES)
+    blank = m.drop(columns="type").astype(str).apply(lambda col: col.str.strip()).eq("").all(axis=1)
+    unknown = int((kind_of.isna() & ~blank).sum())
+    for sh, mp in MASTER_MAP.items():
+        rows = m[kind_of == sh]
+        if rows.empty:
+            continue
+        out[sh] = pd.DataFrame({sc: rows[mc] for mc, sc in mp.items()}).reset_index(drop=True)
+    return out, unknown
+
+
+def master_template_xlsx():
+    """Ek hi sheet ('Master') wala khali restore format + Instructions + Examples (examples restore nahi hote)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = MASTER_SHEET
+    head_fill = PatternFill("solid", fgColor="4F46E5")
+    head_font = Font(bold=True, color="FFFFFF")
+    text_cols = ("date", "due_date", "phone", "first_due", "cash_date", "promise_date", "set_on")
+    widths = {"type": 14, "date": 14, "name": 24, "kind": 22, "amount": 14, "category": 22, "place": 24,
+              "note": 30, "mode": 11, "due_date": 14, "phone": 16, "loan_amount": 13, "kist_amount": 13,
+              "total_kists": 12, "first_due": 14, "penalty_type": 13, "penalty_amount": 15, "cash_date": 14,
+              "cash_amount": 14, "cash_place": 22, "followup_mode": 14, "promise_date": 14, "set_on": 14}
+
+    def setup(sheet, rows=0):
+        sheet.append(MASTER_COLS)
+        for i, col in enumerate(MASTER_COLS, start=1):
+            c = sheet.cell(row=1, column=i)
+            c.fill, c.font = head_fill, head_font
+            sheet.column_dimensions[c.column_letter].width = widths[col]
+        sheet.freeze_panes = "A2"
+
+    setup(ws)
+    for col in text_cols:  # tarikh/phone ko text rakho, taaki Excel format na badle
+        i = MASTER_COLS.index(col) + 1
+        for r in range(2, 3002):
+            ws.cell(row=r, column=i).number_format = "@"
+
+    def dropdown(options, col, strict=True):
+        letter = ws.cell(row=1, column=MASTER_COLS.index(col) + 1).column_letter
+        dv = DataValidation(type="list", formula1='"' + ",".join(options) + '"',
+                            allow_blank=True, showErrorMessage=strict)
+        dv.error, dv.errorTitle = "Select a value from the dropdown", "Invalid value"
+        ws.add_data_validation(dv)
+        dv.add(f"{letter}2:{letter}3000")
+
+    dropdown(list(MASTER_MAP), "type")
+    dropdown(list(KINDS) + ["kist", "penalty"], "kind")
+    dropdown(MODES, "mode")
+    dropdown(list(LOAN_PEN_TYPES), "penalty_type")
+    dropdown(["date", "never"], "followup_mode")
+
+    ex = wb.create_sheet("Examples")
+    setup(ex)
+    samples = [
+        dict(type="Parties", name="Ramesh Sharma", phone="9876543210"),
+        dict(type="Udhari", date="2026-10-01", name="Ramesh Sharma", kind="Money lent", amount=5000,
+             note="For shop", mode="Cash", due_date="2026-11-01"),
+        dict(type="Udhari", date="2026-10-10", name="Ramesh Sharma", kind="Repayment received", amount=2000,
+             mode="Online"),
+        dict(type="Income", date="2026-10-01", category="Salary", amount=30000, mode="Online"),
+        dict(type="Kharcha", date="2026-10-05", place="D-Mart", category="Ghar / Ration", amount=1200,
+             mode="Online"),
+        dict(type="Loan", name="Bike loan", loan_amount=60000, kist_amount=3000, total_kists=24,
+             first_due="2026-11-05", penalty_type="fixed", penalty_amount=200),
+        dict(type="Kist_Penalty", date="2026-11-05", name="Bike loan", kind="kist", amount=3000, mode="Online"),
+        dict(type="Cash_Kharch", cash_date="2026-10-02", cash_amount=2000, cash_place="ATM",
+             date="2026-10-03", amount=150, place="Chai"),
+        dict(type="Followup", name="Ramesh Sharma", followup_mode="date", promise_date="2026-11-01",
+             set_on="2026-10-20"),
+    ]
+    for smp in samples:
+        ex.append([smp.get(c, "") for c in MASTER_COLS])
+
+    ins = wb.create_sheet("Instructions")
+    lines = [
+        ("Master restore file: everything on ONE sheet", True),
+        ("", False),
+        ("1. Use only the 'Master' sheet. Each row is one record. Do not change the header row.", False),
+        ("2. The 'type' column (dropdown) tells the app what the row is. Fill only the columns listed below for that type.", False),
+        ("3. Dates: YYYY-MM-DD, for example 2026-10-27. Leave unused columns blank.", False),
+        ("4. Rows can be in any order. Exact duplicates are skipped, so restoring the same file twice is safe.", False),
+        ("5. The 'Examples' sheet shows one filled row per type. It is NOT restored.", False),
+        ("6. 'Download master backup' in the app gives a file in this same format, ready to restore.", False),
+        ("", False),
+        ("Columns to fill for each type", True),
+    ]
+    for sh, mp in MASTER_MAP.items():
+        lines.append((f"{sh:<13}-> " + ", ".join(mp), False))
+    lines += [
+        ("", False),
+        ("Notes", True),
+        ("Udhari: name = party name, kind = " + " / ".join(KINDS) + "; due_date only for Money lent / Money borrowed.", False),
+        ("Income: category = source (Salary, Bonus, Rent ...).", False),
+        ("Loan: name must be unique; penalty_type = fixed / daily / pct.", False),
+        ("Kist_Penalty: name = loan name (must exist in a Loan row or in the app); kind = kist or penalty.", False),
+        ("Cash_Kharch: cash_* = the original Cash expense; date/amount/place = where that cash was spent.", False),
+        ("Followup: name = party name; followup_mode = date or never; promise_date only when mode is date.", False),
+        ("mode (Udhari, Income, Kharcha, Kist_Penalty) = Cash or Online.", False),
+    ]
+    for text, bold in lines:
+        ins.append([text])
+        ins.cell(row=ins.max_row, column=1).font = Font(bold=bold, size=12 if bold else 11, name="Consolas" if "->" in text else "Calibri")
+    ins.column_dimensions["A"].width = 120
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 
 def to_xlsx_multi(sheets):
     """{sheet_naam: DataFrame} ko ek Excel (.xlsx) file me badalta hai."""
@@ -2376,8 +2553,17 @@ def read_backup_all(f):
         out["Udhari"] = _clean(pd.read_csv(f))
         return out
     sheets = pd.read_excel(f, sheet_name=None, dtype={"date": str, "first_due": str, "due_date": str, "phone": str,
-                                                  "cash_date": str, "promise_date": str, "set_on": str})
-    return {k: _clean(sheets[k]) if k in sheets else None for k in SHEETS}
+                                                  "cash_date": str, "promise_date": str, "set_on": str,
+                                                  "type": str})
+    out = {k: _clean(sheets[k]) if k in sheets else None for k in SHEETS}
+    out["_master_skipped"] = 0
+    mk = next((n for n in sheets if str(n).strip().lower() == MASTER_SHEET.lower()), None)
+    if mk is not None:  # Master sheet ho to uski rows ko normal sheets me baant do
+        parts, out["_master_skipped"] = from_master(_clean(sheets[mk]))
+        for k, df in parts.items():
+            if df is not None:
+                out[k] = df if out[k] is None else pd.concat([out[k], df], ignore_index=True)
+    return out
 
 
 def template_xlsx():
@@ -2561,6 +2747,12 @@ def backup_section():
     ).fillna("")
     empty = export.empty and inc_export.empty and loan_export.empty and exp_export.empty
 
+    master_export = to_master({
+        "Udhari": export, "Income": inc_export, "Kharcha": exp_export, "Loan": loan_export,
+        "Kist_Penalty": pay_export, "Parties": party_export, "Cash_Kharch": cash_export,
+        "Followup": follow_export,
+    })
+
     c1, c2 = st.columns(2)
     # restore me error aane par bhi ye hissa dikhta rahe, isliye pehle hi bana liya
     wipe_box = st.container()
@@ -2588,6 +2780,13 @@ def backup_section():
             file_name=f"balance_sheet_backup_{date.today().isoformat()}.xlsx",
             mime=XLSX_MIME, disabled=empty, type="primary",
         )
+        st.download_button(
+            t("Download master backup (one sheet)"),
+            to_xlsx_multi({MASTER_SHEET: master_export}),
+            file_name=f"balance_sheet_master_{date.today().isoformat()}.xlsx",
+            mime=XLSX_MIME, disabled=master_export.empty,
+            help=t("All records on a single 'Master' sheet. It can be restored directly."),
+        )
     with c2:
         st.markdown(t("#### Restore"))
         st.download_button(
@@ -2597,15 +2796,25 @@ def backup_section():
             mime=XLSX_MIME,
             help=t("Fill in this template and upload it below. The Instructions sheet explains each column."),
         )
+        st.download_button(
+            t("Download master restore template (one sheet)"),
+            master_template_xlsx(),
+            file_name="balance_sheet_master_restore_format.xlsx",
+            mime=XLSX_MIME,
+            help=t("One sheet holds everything. The 'type' column says what each row is. See the Instructions sheet."),
+        )
         up = st.file_uploader(t("Select a backup file"), type=["xlsx", "csv"], label_visibility="collapsed")
         if up is not None and st.button(t("Restore")):
             sheets = read_backup_all(up)
             ud, ic, lo, kp, ke, pa, cs, fu = (sheets[k] for k in SHEETS)
             if all(x is None for x in (ud, ic, lo, kp, ke, pa, cs, fu)):
-                st.error(t("The file must contain at least one of these sheets: Udhari, Income, Loan, Kist_Penalty, Kharcha, Parties, Cash_Kharch, Followup."))
+                st.error(t("The file must contain at least one of these sheets: Master, Udhari, Income, Loan, Kist_Penalty, Kharcha, Parties, Cash_Kharch, Followup."))
                 return
 
             msgs = []
+            if sheets.get("_master_skipped"):
+                msgs.append(tf("Master sheet: {n} rows skipped because the 'type' value was not recognised.",
+                               n=sheets["_master_skipped"]))
             if pa is not None:
                 # phone numbers pehle, taaki neeche banne wali parties me number pehle se jud jaye
                 if not set(PARTY_COLS).issubset(pa.columns):
