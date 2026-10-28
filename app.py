@@ -635,7 +635,8 @@ def language_picker():
         st.rerun()
 
 
-st.set_page_config(page_title="Balance Sheet", page_icon="📒", layout="wide")
+st.set_page_config(page_title="Balance Sheet", page_icon="📒", layout="wide",
+                   initial_sidebar_state="collapsed")
 
 CSS = """
 <style>
@@ -646,7 +647,7 @@ h1, h2, h3, h4 {
     font-family: 'Source Serif 4', Georgia, serif !important;
     font-weight: 600 !important; letter-spacing: -0.01em; color: #14202b;
 }
-.block-container { padding-top: 1.4rem; max-width: 1180px; }
+.block-container { padding-top: 4.6rem; max-width: 1180px; }
 #MainMenu, footer { visibility: hidden; }
 
 /* Page header: flat navy band closed by an accountant's double rule */
@@ -717,6 +718,7 @@ div[data-testid="stFormSubmitButton"] > button {
 }
 .stButton > button:active, div[data-testid="stFormSubmitButton"] > button:active { transform: scale(0.98); }
 div[role="radiogroup"] { gap: 0.5rem !important; flex-wrap: wrap; }
+button[kind="primary"], button[kind="secondary"] { font-weight: 600; }
 div[role="radiogroup"] > label {
     min-height: 3rem; padding: 0.55rem 1rem; border: 1.5px solid #cdd5db; border-radius: 10px;
     background: #fff; cursor: pointer; align-items: center; font-size: 1.02rem;
@@ -1082,14 +1084,16 @@ PAGE_ICONS = {P_DASH: "📊", P_SAVE: "💰", P_NEW: "➕", P_EDIT: "⚙️"}
 
 
 def top_nav():
-    """Big tap-friendly page buttons at the top, so the sidebar is not needed."""
-    cols = st.columns(len(PAGES))
-    for col, p in zip(cols, PAGES):
-        col.button(
-            f"{PAGE_ICONS[p]} {t(p)}", key=f"nav_{p}", on_click=go, args=(p,),
-            use_container_width=True,
-            type="primary" if st.session_state.get("page") == p else "secondary",
-        )
+    """Big tap-friendly page buttons in a 2x2 grid, so the sidebar is not needed."""
+    cur = st.session_state.get("page")
+    for row in (PAGES[:2], PAGES[2:]):
+        cols = st.columns(2)
+        for col, p in zip(cols, row):
+            col.button(
+                f"{PAGE_ICONS[p]}  {t(p)}", key=f"nav_{p}", on_click=go, args=(p,),
+                use_container_width=True, type="primary" if cur == p else "secondary",
+            )
+    st.write("")
 
 
 # ---------------------------------------------------------------- follow-up alerts
