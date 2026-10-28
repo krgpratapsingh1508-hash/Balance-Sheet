@@ -856,7 +856,20 @@ def go(page, party=None):
 
 
 # ---------------------------------------------------------------- pages
-def party_card(r, key):
+def contact_block(r):
+    phone = r["phone"].strip() if isinstance(r["phone"], str) else ""
+    st.markdown(f'<div class="pname">{escape(r["name"])}</div>', unsafe_allow_html=True)
+    if phone:
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        wa = ("91" + digits) if len(digits) == 10 else digits
+        st.markdown(f'<div class="pname" style="font-size:1.15rem">{t("Phone")}: {escape(phone)}</div>',
+                    unsafe_allow_html=True)
+        st.markdown(f"[📞 {t('Call')}](tel:{digits})  ·  [💬 WhatsApp](https://wa.me/{wa})")
+    else:
+        st.caption(t("No phone number saved for this party."))
+
+
+def party_card(r, key, inline=False):
     cls, label = status_of(r["balance"])
     cls, label = cls, t(label)
     last = tf("last entry {d}", d=r["last"]) if r["last"] else t("no entries yet")
@@ -875,17 +888,13 @@ def party_card(r, key):
             t("Add entry"), key=key, use_container_width=True,
             on_click=go, args=(P_NEW, r["name"]),
         )
-        with st.expander(t("Contact")):
-            phone = r["phone"].strip() if isinstance(r["phone"], str) else ""
-            st.markdown(f'<div class="pname">{escape(r["name"])}</div>', unsafe_allow_html=True)
-            if phone:
-                digits = "".join(ch for ch in phone if ch.isdigit())
-                wa = ("91" + digits) if len(digits) == 10 else digits
-                st.markdown(f'<div class="pname" style="font-size:1.15rem">{t("Phone")}: {escape(phone)}</div>',
-                            unsafe_allow_html=True)
-                st.markdown(f"[📞 {t('Call')}](tel:{digits})  ·  [💬 WhatsApp](https://wa.me/{wa})")
-            else:
-                st.caption(t("No phone number saved for this party."))
+        if inline:
+            # inside another expander, so the contact details are shown directly
+            st.divider()
+            contact_block(r)
+        else:
+            with st.expander(t("Contact")):
+                contact_block(r)
 
 
 CF_COLS = ["Income", "Udhar diya", "Udhar wapas diya", "Kist", "Penalty", "Kharcha", "Wapas mile", "Udhar liya"]
@@ -1153,8 +1162,19 @@ def page_dashboard():
 
     this_month = inc.loc[inc["month"] == date.today().strftime("%Y-%m"), "amount"].sum()
     c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(kpi("Receivable", inr(milna), (tf("from 1 party") if n_mil == 1 else tf("from {n} parties", n=n_mil)), "g"), unsafe_allow_html=True)
-    c2.markdown(kpi("Payable", inr(dena), (tf("to 1 party") if n_den == 1 else tf("to {n} parties", n=n_den)), "r"), unsafe_allow_html=True)
+    def kpi_with_parties(col, label, amount, n, cls, mask, one, many):
+        txt = t(one) if n == 1 else tf(many, n=n)
+        with col:
+            st.markdown(kpi(label, inr(amount), "" if n else txt, cls), unsafe_allow_html=True)
+            if n:
+                with st.expander("👥 " + txt):
+                    sub = s[mask]
+                    sub = sub.reindex(sub["balance"].abs().sort_values(ascending=False).index)
+                    for _, pr in sub.iterrows():
+                        party_card(pr, key=f"kpi_{cls}_{pr['id']}", inline=True)
+
+    kpi_with_parties(c1, "Receivable", milna, n_mil, "g", s["balance"] > 0, "from 1 party", "from {n} parties")
+    kpi_with_parties(c2, "Payable", dena, n_den, "r", s["balance"] < 0, "to 1 party", "to {n} parties")
     c3.markdown(
         kpi("Net balance", inr(milna - dena), "receivable − payable", "b"), unsafe_allow_html=True
     )
