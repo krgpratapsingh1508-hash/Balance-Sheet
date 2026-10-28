@@ -8,10 +8,11 @@ import re
 import hmac
 import sqlite3
 from contextlib import closing
-from datetime import date
+from datetime import date, timedelta
 from html import escape
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import quote
 
 import altair as alt
 import pandas as pd
@@ -398,6 +399,30 @@ HI = {
     "in − out": "आया − गया",
     "To correct or delete an entry, open 'Edit records' above.": "किसी एंट्री को सुधारने या हटाने के लिए ऊपर 'रिकॉर्ड बदलें' खोलें।",
     "{p} parties, {n} entries": "{p} पार्टियाँ, {n} एंट्रियाँ",
+    # follow-up alerts
+    "Follow-ups": "फ़ॉलो-अप",
+    "{n} follow-up(s) pending": "{n} फ़ॉलो-अप बाकी",
+    "{name} owes you {amt}, unpaid for {days} days (since {since}).":
+        "{name} को आपने {amt} दिए थे, {days} दिन हो गए (तारीख {since} से)।",
+    "You owe {name} {amt}, unpaid for {days} days (since {since}).":
+        "आपको {name} को {amt} देने हैं, {days} दिन हो गए (तारीख {since} से)।",
+    "The date promised earlier ({d}) has passed.": "पहले बताई गई तारीख ({d}) निकल चुकी है।",
+    "When will they pay?": "वह पैसे कब देगा/देगी?",
+    "When will you pay?": "आप पैसे कब दोगे?",
+    "Save date": "तारीख सेव करें",
+    "Will never pay": "कभी नहीं देगा/देगी",
+    "Make message": "मैसेज बनाएँ",
+    "Message to send": "भेजने वाला मैसेज",
+    "OK, send on WhatsApp": "ठीक है, WhatsApp पर भेजें",
+    "WhatsApp opens with this message ready. Tap send there.":
+        "WhatsApp इसी मैसेज के साथ खुलेगा। वहाँ सेंड दबा दें।",
+    "Done": "हो गया",
+    "No phone number saved for this party, so WhatsApp cannot be opened.":
+        "इस पार्टी का फ़ोन नंबर सेव नहीं है, इसलिए WhatsApp नहीं खुल सकता।",
+    "Marked as 'will never pay' ({n})": "'कभी नहीं देगा' चिह्नित ({n})",
+    "Ask again": "फिर से पूछें",
+    "Hello {name}, I owe you {amt}. It will be paid by {d}. Thank you for your patience.":
+        "नमस्ते {name}, मुझे आपके {amt} देने हैं। यह राशि {d} तक चुका दी जाएगी। धैर्य रखने के लिए धन्यवाद।",
 }
 
 HI_MONTHS = {
@@ -673,6 +698,12 @@ def init_db():
                 penalty_amount REAL NOT NULL DEFAULT 0,
                 note TEXT DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS followups(
+                party_id INTEGER PRIMARY KEY REFERENCES parties(id) ON DELETE CASCADE,
+                mode TEXT NOT NULL,
+                promise_date TEXT DEFAULT '',
+                set_on TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS loan_payments(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 loan_id INTEGER NOT NULL REFERENCES loans(id) ON DELETE CASCADE,
@@ -853,6 +884,162 @@ def go(page, party=None):
     st.session_state["page"] = page
     if party is not None:
         st.session_state["prefill_party"] = party
+
+
+# ---------------------------------------------------------------- follow-up alerts
+FOLLOW_RECEIVABLE_MONTHS = 2   # money you lent: alert after 2 months
+FOLLOW_PAYABLE_DAYS = 15       # money you borrowed: alert after 15 days
+
+
+def set_followup(pid, mode, promise=""):
+    run(
+        "INSERT INTO followups(party_id, mode, promise_date, set_on) VALUES (?,?,?,?) "
+        "ON CONFLICT(party_id) DO UPDATE SET mode = excluded.mode, "
+        "promise_date = excluded.promise_date, set_on = excluded.set_on",
+        (int(pid), mode, promise, date.today().isoformat()),
+    )
+
+
+def clear_followup(pid):
+    run("DELETE FROM followups WHERE party_id = ?", (int(pid),))
+
+
+def save_promise(pid):
+    set_followup(pid, "date", st.session_state[f"fu_d_{pid}"].isoformat())
+
+
+def never_pays(pid):
+    set_followup(pid, "never")
+
+
+def make_payable_msg(pid, name, amt):
+    d = st.session_state[f"fu_pd_{pid}"]
+    set_followup(pid, "date", d.isoformat())
+    st.session_state[f"fu_txt_{pid}"] = tf(
+        "Hello {name}, I owe you {amt}. It will be paid by {d}. Thank you for your patience.",
+        name=name, amt=inr(amt), d=fdate(d),
+    )
+
+
+def close_msg(pid):
+    st.session_state.pop(f"fu_txt_{pid}", None)
+
+
+def oldest_open_date(rows, sign):
+    """Date of the oldest part of the balance that is still unpaid (oldest entries are settled first)."""
+    adds = rows[rows["signed"] * sign > 0].sort_values(["date", "id"])
+    left = float(-(rows.loc[rows["signed"] * sign < 0, "signed"] * sign).sum())
+    for r in adds.itertuples():
+        amt = float(r.amount)
+        if left >= amt - 0.005:
+            left -= amt
+            continue
+        return date.fromisoformat(str(r.date)[:10])
+    return None
+
+
+def followup_alerts():
+    """Parties whose money has been pending too long, plus parties marked 'will never pay'."""
+    today = date.today()
+    s = summary_df()
+    if s.empty:
+        return [], []
+    df = txns_df()
+    fu = query_df("SELECT party_id, mode, promise_date FROM followups")
+    fmap = {int(r.party_id): r for r in fu.itertuples()}
+    alerts, never = [], []
+    for r in s.itertuples():
+        pid = int(r.id)
+        f = fmap.get(pid)
+        if abs(r.balance) < 0.005:
+            if f is not None:
+                clear_followup(pid)  # settled, so the old follow-up is no longer needed
+            continue
+        sign = 1 if r.balance > 0 else -1
+        since = oldest_open_date(df[df["party_id"] == pid], sign)
+        if since is None:
+            continue
+        item = {
+            "id": pid, "name": r.name, "phone": r.phone or "", "amt": abs(float(r.balance)),
+            "sign": sign, "since": since, "days": (today - since).days, "promise": None,
+        }
+        if f is not None and f.mode == "never" and sign > 0:
+            never.append(item)
+            continue
+        due_on = add_months(since, FOLLOW_RECEIVABLE_MONTHS) if sign > 0 else since + timedelta(days=FOLLOW_PAYABLE_DAYS)
+        if today < due_on:
+            continue
+        if f is not None and f.mode == "date" and f.promise_date:
+            promise = date.fromisoformat(f.promise_date)
+            # Hidden until the chosen date passes (but keep the message box open while it is being used)
+            if promise >= today and f"fu_txt_{pid}" not in st.session_state:
+                continue
+            if promise < today:
+                item["promise"] = promise
+        alerts.append(item)
+    return alerts, never
+
+
+def whatsapp_url(phone, text):
+    digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+    if not digits:
+        return ""
+    wa = ("91" + digits) if len(digits) == 10 else digits
+    return f"https://wa.me/{wa}?text={quote(text)}"
+
+
+def followup_section():
+    alerts, never = followup_alerts()
+    if alerts:
+        st.subheader("⏰ " + t("Follow-ups"))
+    for a in alerts:
+        pid = a["id"]
+        with st.container(border=True):
+            tmpl = ("{name} owes you {amt}, unpaid for {days} days (since {since})." if a["sign"] > 0
+                    else "You owe {name} {amt}, unpaid for {days} days (since {since}).")
+            st.markdown(
+                "**" + tf(tmpl, name=a["name"], amt=inr(a["amt"]), days=a["days"], since=fdate(a["since"])) + "**"
+            )
+            if a["promise"]:
+                st.caption(tf("The date promised earlier ({d}) has passed.", d=fdate(a["promise"])))
+            if a["sign"] > 0:
+                # money lent: pick the date they will pay, or mark that they never will
+                c1, c2, c3 = st.columns([2, 1, 1.4])
+                c1.date_input(t("When will they pay?"), value=date.today() + timedelta(days=7),
+                              min_value=date.today(), key=f"fu_d_{pid}")
+                c2.write("")
+                c2.button(t("Save date"), key=f"fu_save_{pid}", on_click=save_promise, args=(pid,),
+                          use_container_width=True, type="primary")
+                c3.write("")
+                c3.button(t("Will never pay"), key=f"fu_never_{pid}", on_click=never_pays, args=(pid,),
+                          use_container_width=True)
+                with st.expander(t("Contact")):
+                    contact_block({"name": a["name"], "phone": a["phone"]})
+            else:
+                # money borrowed: pick your date, make a message, send it on WhatsApp
+                c1, c2 = st.columns([2, 1])
+                c1.date_input(t("When will you pay?"), value=date.today() + timedelta(days=7),
+                              min_value=date.today(), key=f"fu_pd_{pid}")
+                c2.write("")
+                c2.button(t("Make message"), key=f"fu_mk_{pid}", on_click=make_payable_msg,
+                          args=(pid, a["name"], a["amt"]), use_container_width=True, type="primary")
+                if f"fu_txt_{pid}" in st.session_state:
+                    text = st.text_area(t("Message to send"), key=f"fu_txt_{pid}", height=110)
+                    url = whatsapp_url(a["phone"], text)
+                    if url:
+                        st.link_button(t("OK, send on WhatsApp"), url, type="primary")
+                        st.caption(t("WhatsApp opens with this message ready. Tap send there."))
+                    else:
+                        st.warning(t("No phone number saved for this party, so WhatsApp cannot be opened."))
+                    st.button(t("Done"), key=f"fu_done_{pid}", on_click=close_msg, args=(pid,))
+    if never:
+        with st.expander(tf("Marked as 'will never pay' ({n})", n=len(never))):
+            for a in never:
+                x, y = st.columns([3, 1])
+                x.write(f"{a['name']}: {inr(a['amt'])}")
+                y.button(t("Ask again"), key=f"fu_again_{a['id']}", on_click=clear_followup, args=(a["id"],))
+    if alerts or never:
+        st.write("")
 
 
 # ---------------------------------------------------------------- pages
@@ -1153,6 +1340,8 @@ def page_dashboard():
         st.info(t("No records yet. Add your first entry to get started."))
         st.button(t("Add first entry"), on_click=go, args=(P_NEW,), type="primary")
         return
+
+    followup_section()
 
     s = summary_df()
     milna = s.loc[s["balance"] > 0, "balance"].sum()
@@ -1623,7 +1812,7 @@ def wipe_all_data():
     """Saari tables ka poora data hata deta hai (ids bhi shuru se)."""
     with closing(sqlite3.connect(DB_PATH)) as c:
         c.execute("PRAGMA foreign_keys = ON")
-        for tbl in ("loan_payments", "loans", "txns", "parties", "income", "expenses"):
+        for tbl in ("loan_payments", "loans", "followups", "txns", "parties", "income", "expenses"):
             c.execute(f"DELETE FROM {tbl}")
         c.execute("DELETE FROM sqlite_sequence")
         c.commit()
@@ -2263,6 +2452,10 @@ def main():
     st.sidebar.markdown(f'<div class="brand">{t("Udhari Khata")}</div>', unsafe_allow_html=True)
     st.sidebar.caption(t("Personal ledger"))
     st.sidebar.radio(t("Menu"), PAGES, key="page", label_visibility="collapsed", format_func=t)
+
+    n_follow = len(followup_alerts()[0])
+    if n_follow:
+        st.sidebar.warning("⏰ " + tf("{n} follow-up(s) pending", n=n_follow))
 
     s = summary_df()
     if not s.empty and s["entries"].sum() > 0:
