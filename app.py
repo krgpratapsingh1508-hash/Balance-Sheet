@@ -749,64 +749,97 @@ section[data-testid="stSidebar"] div[role="radiogroup"] > label { width: 100%; }
     .kpi .val { font-size: 1.5rem; }
 }
 
-/* ===== Bada, saaf aur sundar text (poore app / admin panel me) ===== */
+/* ===== Bada, saaf aur sundar design (poore app / admin panel me) ===== */
 .stApp { line-height: 1.6; }
 .stMarkdown p, .stMarkdown li { font-size: 1.05rem; line-height: 1.65; }
 
-/* chhota chhota (caption) likha hua: bada, gehra rang, padhne me aasan */
-div[data-testid="stCaptionContainer"], div[data-testid="stCaptionContainer"] p,
-.stCaption, small {
-    font-size: 1.02rem !important; line-height: 1.6 !important;
-    color: #3d4b57 !important; font-weight: 500;
+/* chhota likha hua (caption): bada aur gehra */
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] *,
+[data-testid="stCaption"], [data-testid="stCaption"] * {
+    font-size: 1.05rem !important; line-height: 1.6 !important;
+    color: #33414d !important; font-weight: 500 !important;
 }
 
-/* har input / choice ka title */
-label[data-testid="stWidgetLabel"] p, div[data-testid="stWidgetLabel"] p {
-    font-size: 1.05rem !important; font-weight: 600 !important; color: #14202b !important;
+/* har input ka title */
+[data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] label {
+    font-size: 1.1rem !important; font-weight: 700 !important; color: #14202b !important;
 }
 
-/* radio ko sundar 'pill / tab' jaisa banao (gol button chhupa kar) */
-div[role="radiogroup"] { gap: 0.6rem !important; }
-div[role="radiogroup"] > label {
-    min-height: 3.1rem; padding: 0.5rem 1.2rem; border-radius: 999px;
-    border: 1.5px solid #c3ced6; background: #fff;
-    box-shadow: 0 1px 2px rgba(15,61,76,.08); transition: all .15s ease;
+/* ---------- RADIO = bade, aasaani se dabne wale PILL BUTTON ---------- */
+[data-testid="stRadio"] [role="radiogroup"] {
+    gap: 0.7rem !important; flex-wrap: wrap !important; padding: 4px 0;
 }
-div[role="radiogroup"] > label > div:first-child { display: none !important; }
-div[role="radiogroup"] > label p, div[role="radiogroup"] > label div {
-    font-size: 1.1rem !important; font-weight: 500; line-height: 1.4;
+[data-testid="stRadio"] label,
+[data-testid="stRadio"] label[data-baseweb="radio"] {
+    position: relative; cursor: pointer; margin: 0 !important;
+    min-height: 3.5rem !important; padding: 0.6rem 1.4rem !important;
+    border: 2px solid #b9c6cf !important; border-radius: 14px !important;
+    background: #ffffff !important; box-shadow: 0 2px 4px rgba(15,61,76,.10);
+    display: inline-flex !important; align-items: center; justify-content: center;
+    transition: all .15s ease; -webkit-tap-highlight-color: transparent;
+    user-select: none;
 }
-div[role="radiogroup"] > label:hover {
-    border-color: #0f3d4c; background: #eef5f8; transform: translateY(-1px);
-    box-shadow: 0 3px 8px rgba(15,61,76,.15);
+/* gol button chhupao */
+[data-testid="stRadio"] label > div:first-child { display: none !important; }
+/* pure pill par kahin bhi dabao to chalega */
+[data-testid="stRadio"] label input {
+    position: absolute !important; inset: 0 !important; width: 100% !important;
+    height: 100% !important; opacity: 0 !important; cursor: pointer; margin: 0 !important; z-index: 2;
 }
-div[role="radiogroup"] > label:has(input:checked) {
-    background: linear-gradient(135deg, #0f3d4c, #1b5a6e); border-color: #0f3d4c;
-    box-shadow: 0 3px 10px rgba(15,61,76,.35);
+[data-testid="stRadio"] label p, [data-testid="stRadio"] label div {
+    font-size: 1.15rem !important; font-weight: 600 !important; color: #14202b; line-height: 1.4;
 }
-div[role="radiogroup"] > label:has(input:checked) p,
-div[role="radiogroup"] > label:has(input:checked) div { font-weight: 600 !important; }
+[data-testid="stRadio"] label:hover {
+    border-color: #0f3d4c !important; background: #eaf3f6 !important;
+    transform: translateY(-2px); box-shadow: 0 6px 14px rgba(15,61,76,.20);
+}
+[data-testid="stRadio"] label:active { transform: scale(0.97); }
+/* chuna hua pill */
+[data-testid="stRadio"] label:has(input:checked) {
+    background: linear-gradient(135deg, #0f3d4c, #1d6075) !important;
+    border-color: #0f3d4c !important; box-shadow: 0 6px 16px rgba(15,61,76,.38);
+}
+[data-testid="stRadio"] label:has(input:checked) p,
+[data-testid="stRadio"] label:has(input:checked) div { color: #ffffff !important; }
+[data-testid="stRadio"] label:has(input:checked)::before {
+    content: "✓"; color: #fff; font-weight: 700; font-size: 1.1rem; margin-right: 8px;
+}
+@media (max-width: 640px) {
+    [data-testid="stRadio"] label { flex: 1 1 auto; padding: 0.6rem 1rem !important; }
+    [data-testid="stRadio"] label p, [data-testid="stRadio"] label div { font-size: 1.08rem !important; }
+}
 
-/* upar ke bade menu buttons */
-.stButton > button { font-size: 1.15rem !important; font-weight: 600; border: 1.5px solid #c3ced6;
-    box-shadow: 0 1px 3px rgba(15,61,76,.10); transition: all .15s ease; }
-.stButton > button p { font-size: 1.15rem !important; font-weight: 600; }
-.stButton > button:hover { border-color: #0f3d4c; box-shadow: 0 4px 12px rgba(15,61,76,.18); transform: translateY(-1px); }
-.stButton > button[kind="primary"] { background: linear-gradient(135deg, #0f3d4c, #1b5a6e);
-    border-color: #0f3d4c; color: #fff; box-shadow: 0 4px 12px rgba(15,61,76,.30); }
+/* ---------- Buttons ---------- */
+.stButton > button, .stDownloadButton > button, .stLinkButton > a,
+[data-testid="stFormSubmitButton"] > button {
+    min-height: 3.4rem !important; border: 2px solid #b9c6cf; border-radius: 14px !important;
+    font-weight: 700 !important; box-shadow: 0 2px 4px rgba(15,61,76,.10); transition: all .15s ease;
+}
+.stButton > button p, .stDownloadButton > button p, [data-testid="stFormSubmitButton"] > button p {
+    font-size: 1.15rem !important; font-weight: 700 !important;
+}
+.stButton > button:hover, .stDownloadButton > button:hover {
+    border-color: #0f3d4c; transform: translateY(-2px); box-shadow: 0 6px 14px rgba(15,61,76,.20);
+}
+.stButton > button[kind="primary"], [data-testid="stFormSubmitButton"] > button[kind="primary"],
+.stDownloadButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #0f3d4c, #1d6075) !important; border-color: #0f3d4c !important;
+    box-shadow: 0 6px 16px rgba(15,61,76,.35);
+}
+.stButton > button[kind="primary"] *, [data-testid="stFormSubmitButton"] > button[kind="primary"] * { color: #fff !important; }
 
-/* sandesh (info / warning / success / error) ka text */
-div[data-testid="stAlert"] p { font-size: 1.05rem !important; line-height: 1.6; }
-div[data-testid="stAlert"] { border-radius: 10px; }
+/* ---------- Sandesh box ---------- */
+[data-testid="stAlert"] { border-radius: 12px; padding: 0.4rem 0.6rem; }
+[data-testid="stAlert"] p { font-size: 1.08rem !important; line-height: 1.6; font-weight: 500; }
 
-/* expander, tab, metric */
-div[data-testid="stExpander"] summary p { font-size: 1.08rem !important; font-weight: 600; }
-button[data-baseweb="tab"] p { font-size: 1.08rem !important; font-weight: 600; }
-div[data-testid="stMetricLabel"] p { font-size: 1rem !important; font-weight: 600; color: #3d4b57; }
-div[data-testid="stMetricValue"] { font-size: 1.7rem !important; }
+/* expander, tab, metric, heading */
+[data-testid="stExpander"] summary p { font-size: 1.1rem !important; font-weight: 700; }
+button[data-baseweb="tab"] p { font-size: 1.1rem !important; font-weight: 700; }
+[data-testid="stMetricLabel"] p { font-size: 1.02rem !important; font-weight: 600; color: #33414d; }
+[data-testid="stMetricValue"] { font-size: 1.7rem !important; }
 h4 { font-size: 1.25rem !important; margin-top: .4rem; }
 
-/* kharche / kpi / card ke chhote text */
+/* card / kpi ke chhote text */
 .kpi .lbl { font-size: .95rem; } .kpi .sub { font-size: .9rem; }
 .pmeta { font-size: .9rem; } .act .s { font-size: .88rem; } .chip { font-size: .85rem; }
 .hero p { font-size: 1.05rem; }
@@ -3468,7 +3501,7 @@ def page_admin():
     if not edit_gate():
         return
     c1, c2 = st.columns([5, 1])
-    c1.caption(t("Admin panel is unlocked for this session."))
+    c1.success(t("Admin panel is unlocked for this session."), icon="🔓")
     c2.button(t("Lock"), on_click=lock_edit, use_container_width=True)
     flash = st.session_state.pop("flash", None)
     if flash:
