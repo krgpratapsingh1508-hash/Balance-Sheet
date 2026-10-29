@@ -584,7 +584,7 @@ NEW_HI = {
     "Edit & Backup": "संपादन और बैकअप",
     "Sign in, or create your own account.": "साइन इन करें, या अपना खाता बनाएँ।",
     "Login": "लॉगिन", "Create account": "खाता बनाएँ", "Forgot password": "पासवर्ड भूल गए",
-    "Account": "खाता",
+    "Account": "खाता", "Login as": "इस रूप में लॉगिन करें", "User": "यूज़र",
     "#### 🔑 Login": "#### 🔑 लॉगिन",
     "#### 🆕 Create account": "#### 🆕 खाता बनाएँ",
     "#### 🔁 Forgot password": "#### 🔁 पासवर्ड भूल गए",
@@ -857,6 +857,131 @@ section[data-testid="stSidebar"] div[role="radiogroup"] > label { width: 100%; }
     .block-container { padding-left: 0.8rem; padding-right: 0.8rem; }
     .hero { padding: 16px 18px; }
     .kpi .val { font-size: 1.5rem; }
+}
+
+/* ================= NAYA DESIGN ================= */
+:root { --navy:#0f3d4c; --teal:#1d6075; --ink:#14202b; --mut:#6b7885; --line:#d6e0e6; --card:#ffffff; }
+.stApp { background: linear-gradient(180deg,#e9f1f5 0, #f6f9fb 360px, #f6f9fb 100%); line-height: 1.6; }
+.stMarkdown p, .stMarkdown li { font-size: 1rem; line-height: 1.65; color: var(--ink); }
+
+/* ---- Header band ---- */
+.hero {
+    background: linear-gradient(120deg,#0f3d4c 0%,#1d6075 70%,#2a8196 100%) !important;
+    border-radius: 20px !important; border-bottom: 0 !important; padding: 26px 30px !important;
+    box-shadow: 0 10px 28px rgba(15,61,76,.28); position: relative; overflow: hidden;
+}
+.hero::after { content:""; position:absolute; right:-40px; top:-60px; width:200px; height:200px;
+    border-radius:50%; background: rgba(255,255,255,.08); }
+.hero h1 { color:#fff !important; font-size: 2rem !important; }
+.hero p, .stMarkdown .hero p { color:#d5e8ee !important; font-size:1rem !important; }
+
+/* ---- Titles: sabse bada -> chhota ---- */
+h3 { font-size:1.45rem !important; color:var(--navy) !important; }
+h4 { font-size:1.3rem !important; color:var(--navy) !important; border-left:6px solid #2a8196;
+     padding-left:12px; margin:.8rem 0 .3rem; }
+[data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] label {
+    border:0 !important; background:transparent !important; box-shadow:none !important;
+    padding:0 !important; min-height:0 !important; display:block !important;
+}
+[data-testid="stWidgetLabel"] p { font-size:1.08rem !important; font-weight:700 !important; color:var(--navy) !important; margin-bottom:2px; }
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] * {
+    font-size:.88rem !important; line-height:1.5 !important; color:var(--mut) !important; font-weight:400 !important;
+}
+
+/* ---- Cards: form, expander, metric ---- */
+[data-testid="stForm"], [data-testid="stExpander"], [data-testid="stMetric"] {
+    background:var(--card) !important; border:1px solid var(--line) !important;
+    border-radius:18px !important; box-shadow:0 4px 14px rgba(15,61,76,.07);
+}
+[data-testid="stForm"] { padding:18px 20px !important; }
+[data-testid="stMetric"] { padding:14px 18px; }
+[data-testid="stMetricLabel"] p { font-size:.95rem !important; font-weight:600; color:var(--mut); }
+[data-testid="stMetricValue"] { font-size:1.7rem !important; color:var(--navy); }
+[data-testid="stExpander"] summary p { font-size:1.05rem !important; font-weight:700; color:var(--navy); }
+
+/* ---- Input boxes ---- */
+[data-baseweb="input"] > div, [data-baseweb="base-input"], [data-baseweb="select"] > div, textarea {
+    background:#f3f7f9 !important; border:1.5px solid #cfdbe2 !important; border-radius:12px !important;
+    min-height:3.1rem; transition:all .15s ease;
+}
+[data-baseweb="input"] input, [data-baseweb="base-input"] input, [data-baseweb="select"] div, textarea {
+    font-size:1.05rem !important; color:var(--ink) !important; font-weight:500;
+}
+[data-baseweb="input"] > div:focus-within, [data-baseweb="select"] > div:focus-within, textarea:focus {
+    background:#fff !important; border-color:var(--teal) !important; box-shadow:0 0 0 4px rgba(29,96,117,.15) !important;
+}
+
+/* ---- Choices: ek 'tab bar' ke andar badi goliyan ---- */
+[data-testid="stRadio"] [role="radiogroup"] {
+    background:#dfe9ee; padding:6px; border-radius:18px; gap:6px !important;
+    display:inline-flex !important; flex-wrap:wrap !important; max-width:100%;
+    box-shadow: inset 0 1px 3px rgba(15,61,76,.12);
+}
+[data-testid="stRadio"] label[data-baseweb="radio"] {
+    position:relative; margin:0 !important; cursor:pointer; user-select:none;
+    min-height:3.1rem !important; padding:.4rem 1.2rem !important;
+    border:0 !important; border-radius:13px !important; background:transparent !important; box-shadow:none !important;
+    display:inline-flex !important; align-items:center; justify-content:center; flex:1 1 auto;
+    transition:all .15s ease; -webkit-tap-highlight-color:transparent;
+}
+[data-testid="stRadio"] label[data-baseweb="radio"]::before { content:none !important; }
+[data-testid="stRadio"] label[data-baseweb="radio"] > div:first-of-type { display:none !important; }
+[data-testid="stRadio"] label[data-baseweb="radio"] > div:nth-of-type(2) { display:block !important; }
+[data-testid="stRadio"] label[data-baseweb="radio"] input {
+    position:absolute !important; inset:0 !important; width:100% !important; height:100% !important;
+    opacity:0 !important; margin:0 !important; cursor:pointer; z-index:2;
+}
+[data-testid="stRadio"] label[data-baseweb="radio"] p, [data-testid="stRadio"] label[data-baseweb="radio"] div {
+    font-size:1rem !important; font-weight:600 !important; color:#4a5a66; line-height:1.35; text-align:center;
+}
+[data-testid="stRadio"] label[data-baseweb="radio"]:hover { background:rgba(255,255,255,.65) !important; }
+[data-testid="stRadio"] label[data-baseweb="radio"]:active { transform:scale(.96); }
+[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {
+    background:linear-gradient(135deg,#0f3d4c,#1d6075) !important; box-shadow:0 4px 12px rgba(15,61,76,.35) !important;
+}
+[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) p,
+[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) div { color:#fff !important; font-weight:700 !important; }
+[class*="st-key-admin_section"] [data-testid="stRadio"] label[data-baseweb="radio"] p { font-size:1.1rem !important; }
+[class*="st-key-edit_type"] [data-testid="stRadio"] [role="radiogroup"] { background:transparent; box-shadow:none; padding:0; gap:8px !important; }
+[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"] {
+    min-height:2.6rem !important; padding:.25rem 1rem !important; border:1.5px solid #b9c9d2 !important;
+    background:#fff !important; border-radius:999px !important; flex:0 0 auto;
+}
+[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"] p { font-size:.92rem !important; }
+[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {
+    background:#d4e9ef !important; border-color:#1d6075 !important; box-shadow:none !important;
+}
+[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) p,
+[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) div { color:#0f3d4c !important; }
+
+/* ---- Buttons ---- */
+.stButton > button, .stDownloadButton > button, .stLinkButton > a, [data-testid="stFormSubmitButton"] > button {
+    min-height:3.3rem !important; border:1.5px solid #bccbd4; border-radius:14px !important; background:#fff;
+    font-weight:700 !important; box-shadow:0 2px 6px rgba(15,61,76,.10); transition:all .15s ease;
+}
+.stButton > button p, .stDownloadButton > button p, [data-testid="stFormSubmitButton"] > button p { font-size:1.05rem !important; font-weight:700 !important; }
+.stButton > button:hover, .stDownloadButton > button:hover { border-color:var(--teal); transform:translateY(-2px); box-shadow:0 8px 18px rgba(15,61,76,.18); }
+.stButton > button:active, [data-testid="stFormSubmitButton"] > button:active { transform:scale(.97); }
+.stButton > button[kind="primary"], [data-testid="stFormSubmitButton"] > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
+    background:linear-gradient(135deg,#0f3d4c,#1d6075) !important; border-color:#0f3d4c !important; box-shadow:0 8px 20px rgba(15,61,76,.32);
+}
+.stButton > button[kind="primary"] *, [data-testid="stFormSubmitButton"] > button[kind="primary"] *, .stDownloadButton > button[kind="primary"] * { color:#fff !important; }
+
+/* ---- Messages ---- */
+[data-testid="stAlert"] { border-radius:14px; box-shadow:0 3px 10px rgba(15,61,76,.07); }
+[data-testid="stAlert"] p { font-size:.98rem !important; line-height:1.55; font-weight:500; }
+button[data-baseweb="tab"] p { font-size:1.05rem !important; font-weight:700; }
+hr { border-color:var(--line) !important; }
+
+/* ---- Dashboard cards ---- */
+.kpi { border-radius:16px !important; box-shadow:0 4px 14px rgba(15,61,76,.08); background:#fff !important; }
+.kpi .lbl { font-size:.92rem; } .kpi .sub { font-size:.86rem; }
+.pmeta { font-size:.88rem; } .act .s { font-size:.86rem; } .chip { font-size:.84rem; border-radius:999px !important; }
+
+@media (max-width:640px){
+    .hero { padding:20px 20px !important; border-radius:16px !important; }
+    [data-testid="stRadio"] [role="radiogroup"] { display:flex !important; width:100%; }
+    [data-testid="stRadio"] label[data-baseweb="radio"] { padding:.4rem .8rem !important; }
 }
 </style>
 
@@ -1450,8 +1575,10 @@ def logout():
 
 
 # ---- login page
-def login_ui():
-    st.markdown(t("#### 🔑 Login"))
+LOGIN_ROLES = ["User", "Admin"]
+
+
+def user_login_form():
     with st.form("login_form"):
         phone = st.text_input(t("Mobile number (your username)"), max_chars=15, placeholder="98XXXXXXXX")
         pw = st.text_input(t("Password"), type="password")
@@ -1469,6 +1596,19 @@ def login_ui():
             st.error(t("Too many wrong attempts. Try again after 10 minutes."))
         else:
             st.error(t("Incorrect mobile number or password."))
+
+
+def login_ui():
+    """Upar dropdown: User ya Admin. User = mobile + password, Admin = admin ID + password."""
+    st.markdown(t("#### 🔑 Login"))
+    role = st.selectbox(
+        t("Login as"), LOGIN_ROLES, key="login_role",
+        format_func=lambda x: {"User": "👤 " + t("User"), "Admin": "🛠 " + t("Admin")}[x],
+    )
+    if role == "Admin":
+        admin_login_ui()
+    else:
+        user_login_form()
 
 
 def otp_step_ui(purpose, phone, on_reset):
@@ -1678,7 +1818,7 @@ def auth_gate():
     """Sabse pehla page: Login / Create account / Forgot password / Admin. True = login ho chuka."""
     if st.session_state.get("auth"):
         return True
-    _, mid, _ = st.columns([1, 1.5, 1])
+    _, mid, _ = st.columns([0.5, 2, 0.5])
     with mid:
         hero("Balance Sheet", "Sign in, or create your own account.")
         language_picker(save=False)
@@ -1689,9 +1829,6 @@ def auth_gate():
             format_func=lambda x: AUTH_ICONS[x] + t(x),
         )
         {"Login": login_ui, "Create account": register_ui, "Forgot password": forgot_ui}[mode]()
-        st.write("")
-        with st.expander(t("🛠 Admin login")):
-            admin_login_ui()
     return False
 
 
@@ -4184,7 +4321,8 @@ def page_admin():
         st.success(t(flash))
     section = st.radio(
         t("Section"), ["Transactions", "Edit records", "Backup & restore"], horizontal=True,
-        key="admin_section", label_visibility="collapsed", format_func=t,
+        key="admin_section", label_visibility="collapsed",
+        format_func=lambda x: {"Transactions": "💸 ", "Edit records": "✏️ ", "Backup & restore": "💾 "}[x] + t(x),
     )
     if section == "Transactions":
         admin_transactions()
@@ -4199,7 +4337,9 @@ def page_admin():
         "Loans": edit_loans,
         "Instalment / penalty payments": edit_loan_payments,
     }
-    pick = st.radio(t("Record type"), list(sections), horizontal=True, key="edit_type", format_func=t)
+    _ic = {"Lending / borrowing": "🤝 ", "Income": "💰 ", "Expenses": "🧾 ", "Loans": "🏦 ", "Instalment / penalty payments": "📅 "}
+    pick = st.radio(t("Record type"), list(sections), horizontal=True, key="edit_type",
+                    format_func=lambda x: _ic.get(x, "") + t(x))
     sections[pick]()
 
 
