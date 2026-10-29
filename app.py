@@ -3,6 +3,7 @@
 Three pages: Dashboard, New entry, Admin panel (Edit records, Backup & restore are inside it, behind the password).
 """
 
+import base64
 import calendar
 import hashlib
 import json
@@ -30,13 +31,10 @@ import streamlit as st
 DATA_DIR = Path(__file__).with_name("data")
 USERS_DB = DATA_DIR / "users.db"
 LEGACY_DB = Path(__file__).with_name("udhari.db")  # purana single-user data (admin kholta hai)
-OTP_TTL = 300          # OTP 5 minute chalta hai
-OTP_COOLDOWN = 30      # dobara OTP 30 second baad
-OTP_MAX_TRIES = 5
-OTP_PER_HOUR = 5       # ek number par ghante me max OTP
 LOGIN_MAX_FAILS = 5
 LOGIN_LOCK_SECS = 600
 MIN_PASSWORD = 6
+MAX_PHOTO_BYTES = 8 * 1024 * 1024
 
 # +1 increases the amount receivable from the party, -1 reduces it.
 KINDS = {
@@ -584,7 +582,34 @@ NEW_HI = {
     "Edit & Backup": "संपादन और बैकअप",
     "Sign in, or create your own account.": "साइन इन करें, या अपना खाता बनाएँ।",
     "Login": "लॉगिन", "Create account": "खाता बनाएँ", "Forgot password": "पासवर्ड भूल गए",
-    "Account": "खाता", "Login as": "इस रूप में लॉगिन करें", "User": "यूज़र",
+    "Account": "खाता",
+    "A new account is created only after the admin verifies it.": "नया खाता तभी बनता है जब एडमिन उसे जाँच लेता है।",
+    "Your photo": "आपकी फ़ोटो",
+    "Take a clear photo of your face, or choose one from the gallery.": "अपने चेहरे की साफ़ फ़ोटो खींचें, या गैलरी से चुनें।",
+    "Please add your photo.": "कृपया अपनी फ़ोटो जोड़ें।",
+    "This photo could not be read. Please choose a JPG or PNG image.": "यह फ़ोटो पढ़ी नहीं जा सकी। कृपया JPG या PNG फ़ोटो चुनें।",
+    "OK, send my request": "ठीक है, मेरी रिक्वेस्ट भेजें",
+    "Your request has been sent to the admin. You can log in after the admin approves it.":
+        "आपकी रिक्वेस्ट एडमिन को भेज दी गई है। एडमिन के मंज़ूर करने के बाद आप लॉगिन कर सकेंगे।",
+    "Go to Login": "लॉगिन पर जाएँ",
+    "Your account is waiting for admin approval. Please try again after the admin approves it.":
+        "आपका खाता एडमिन की मंज़ूरी का इंतज़ार कर रहा है। एडमिन के मंज़ूर करने के बाद फिर कोशिश करें।",
+    "Your account request was not approved. Please contact the admin.": "आपकी खाता रिक्वेस्ट मंज़ूर नहीं हुई। कृपया एडमिन से संपर्क करें।",
+    "A request for this number is already waiting for admin approval.": "इस नंबर की रिक्वेस्ट पहले से एडमिन की मंज़ूरी का इंतज़ार कर रही है।",
+    "#### 🕒 Pending requests": "#### 🕒 लंबित रिक्वेस्ट", "No pending requests.": "कोई लंबित रिक्वेस्ट नहीं है।",
+    "{n} account request(s) are waiting for your approval.": "{n} खाता रिक्वेस्ट आपकी मंज़ूरी का इंतज़ार कर रही हैं।",
+    "Approve": "मंज़ूर करें", "Reject": "अस्वीकार करें", "Block": "ब्लॉक करें", "Status": "स्थिति",
+    "approved": "मंज़ूर", "pending": "प्रतीक्षा में", "rejected": "अस्वीकृत",
+    "User approved.": "यूज़र मंज़ूर हो गया।", "User blocked.": "यूज़र ब्लॉक हो गया।", "Request rejected.": "रिक्वेस्ट अस्वीकार हो गई।",
+    "Continue": "आगे बढ़ें", "Step {n} of 3": "चरण {n} / 3",
+    "To reset your password, please contact the admin. The admin can set a new password for you.":
+        "पासवर्ड रीसेट करने के लिए एडमिन से संपर्क करें। एडमिन आपके लिए नया पासवर्ड सेट कर सकता है।",
+    "Free mode: OTP is off. New users register without OTP, and you reset forgotten passwords from here. Add FAST2SMS_KEY in Secrets to turn OTP on.":
+        "फ्री मोड: OTP बंद है। नए यूज़र बिना OTP के रजिस्टर होते हैं, और भूले हुए पासवर्ड आप यहीं से रीसेट करें। OTP चालू करने के लिए Secrets में FAST2SMS_KEY जोड़ें।",
+    "The SMS service is not set up yet, so OTP cannot be sent. Please contact the admin.":
+        "SMS सेवा अभी चालू नहीं है, इसलिए OTP नहीं भेजा जा सकता। कृपया एडमिन से संपर्क करें।",
+    "SMS is not set up: new users cannot register and nobody can reset a password. Add FAST2SMS_KEY in the app Secrets.":
+        "SMS चालू नहीं है: नए यूज़र रजिस्टर नहीं कर सकते और कोई पासवर्ड रीसेट नहीं कर सकता। ऐप के Secrets में FAST2SMS_KEY जोड़ें।", "Login as": "इस रूप में लॉगिन करें", "User": "यूज़र",
     "#### 🔑 Login": "#### 🔑 लॉगिन",
     "#### 🆕 Create account": "#### 🆕 खाता बनाएँ",
     "#### 🔁 Forgot password": "#### 🔁 पासवर्ड भूल गए",
@@ -1327,11 +1352,17 @@ def init_users_db():
                 created_at TEXT NOT NULL,
                 last_login TEXT DEFAULT '',
                 fails INTEGER DEFAULT 0,
-                locked_until REAL DEFAULT 0
+                locked_until REAL DEFAULT 0,
+                status TEXT DEFAULT 'approved',
+                photo BLOB
             );
-            CREATE TABLE IF NOT EXISTS otp_log(phone TEXT NOT NULL, ts REAL NOT NULL);
             """
         )
+        cols = [r[1] for r in c.execute("PRAGMA table_info(users)")]
+        if "status" not in cols:  # purane users pehle se approved maane jayenge
+            c.execute("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'approved'")
+        if "photo" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN photo BLOB")
         cols = [r[1] for r in c.execute("PRAGMA table_info(users)")]
         if "aadhaar" in cols:  # purana version: Aadhaar column hata do
             c.executescript(
@@ -1347,12 +1378,14 @@ def init_users_db():
                     created_at TEXT NOT NULL,
                     last_login TEXT DEFAULT '',
                     fails INTEGER DEFAULT 0,
-                    locked_until REAL DEFAULT 0
+                    locked_until REAL DEFAULT 0,
+                    status TEXT DEFAULT 'approved',
+                    photo BLOB
                 );
                 INSERT INTO users_new(id, phone, name, father_name, age, pw_salt, pw_hash,
-                                      created_at, last_login, fails, locked_until)
+                                      created_at, last_login, fails, locked_until, status, photo)
                     SELECT id, phone, name, father_name, age, pw_salt, pw_hash,
-                           created_at, last_login, fails, locked_until FROM users;
+                           created_at, last_login, fails, locked_until, status, photo FROM users;
                 DROP TABLE users;
                 ALTER TABLE users_new RENAME TO users;
                 """
@@ -1396,87 +1429,47 @@ def valid_name(s):
     return len(s) >= 2 and not re.search(r"\d", s)
 
 
-# ---- OTP (SMS). Fast2SMS key milte hi asli SMS jata hai, warna demo mode (OTP screen par dikhta hai)
-def sms_key():
+# ---- photo
+def process_photo(raw):
+    """Photo ko chhota (320x320, gol karne layak) JPEG bana deta hai. Galat file par ValueError."""
     try:
-        return st.secrets.get("FAST2SMS_KEY")
-    except Exception:
-        return None
+        from PIL import Image, ImageOps
+        if len(raw) > MAX_PHOTO_BYTES:
+            raise ValueError("too big")
+        im = Image.open(BytesIO(raw))
+        if im.size[0] * im.size[1] > 40_000_000:
+            raise ValueError("too many pixels")
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        w, h = im.size
+        m = min(w, h)
+        left, top = (w - m) // 2, (h - m) // 2
+        im = im.crop((left, top, left + m, top + m)).resize((320, 320))
+        out = BytesIO()
+        im.save(out, "JPEG", quality=85)
+        return out.getvalue()
+    except Exception as e:
+        raise ValueError("bad photo") from e
 
 
-def send_sms_otp(phone, otp):
-    """Returns 'sent' (SMS gaya), 'demo' (SMS service set nahi) ya 'fail'."""
-    key = sms_key()
-    if not key:
-        return "demo"
-    try:
-        qs = urllib.parse.urlencode(
-            {"authorization": key, "route": "otp", "variables_values": otp, "numbers": phone}
+def photo_html(photo, size=56, name=""):
+    """Gol photo (ya photo na ho to naam ka pehla akshar)."""
+    if photo:
+        b64 = base64.b64encode(bytes(photo)).decode()
+        return (
+            f'<img src="data:image/jpeg;base64,{b64}" style="width:{size}px;height:{size}px;'
+            f'border-radius:50%;object-fit:cover;border:3px solid #fff;box-shadow:0 2px 8px rgba(15,61,76,.3);">'
         )
-        req = urllib.request.Request(
-            "https://www.fast2sms.com/dev/bulkV2?" + qs, headers={"cache-control": "no-cache"}
-        )
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read().decode())
-        return "sent" if data.get("return") else "fail"
-    except Exception:
-        return "fail"
+    ini = escape((name or "?").strip()[:1].upper() or "?")
+    return (
+        f'<div style="width:{size}px;height:{size}px;border-radius:50%;background:#1d6075;color:#fff;'
+        f'display:flex;align-items:center;justify-content:center;font-size:{size // 2}px;font-weight:700;">{ini}</div>'
+    )
 
 
-def _otp_hash(purpose, phone, code):
-    return hashlib.sha256(f"{purpose}:{phone}:{code}".encode()).hexdigest()
-
-
-def otp_issue(purpose, phone):
-    """'sent' | 'demo' | 'fail' | 'wait' | 'limit'"""
-    now = time.time()
-    o = st.session_state.get("otp")
-    if o and o["phone"] == phone and o["purpose"] == purpose and now - o["sent"] < OTP_COOLDOWN:
-        return "wait"
+def user_photo(uid):
     with closing(users_conn()) as c:
-        c.execute("DELETE FROM otp_log WHERE ts < ?", (now - 3600,))
-        n = c.execute("SELECT COUNT(*) FROM otp_log WHERE phone = ?", (phone,)).fetchone()[0]
-        if n >= OTP_PER_HOUR:
-            c.commit()
-            return "limit"
-        code = f"{secrets.randbelow(10 ** 6):06d}"
-        status = send_sms_otp(phone, code)
-        if status == "fail":
-            c.commit()
-            return "fail"
-        c.execute("INSERT INTO otp_log(phone, ts) VALUES (?, ?)", (phone, now))
-        c.commit()
-    st.session_state["otp"] = {
-        "purpose": purpose, "phone": phone, "hash": _otp_hash(purpose, phone, code),
-        "exp": now + OTP_TTL, "tries": 0, "sent": now, "demo": code if status == "demo" else "",
-    }
-    return status
-
-
-def otp_check(purpose, phone, entered):
-    """'ok' | 'bad' | 'expired' | 'locked' | 'none'"""
-    o = st.session_state.get("otp")
-    if not o or o["phone"] != phone or o["purpose"] != purpose:
-        return "none"
-    if time.time() > o["exp"]:
-        return "expired"
-    if o["tries"] >= OTP_MAX_TRIES:
-        return "locked"
-    o["tries"] += 1
-    if hmac.compare_digest(_otp_hash(purpose, phone, str(entered).strip()), o["hash"]):
-        st.session_state.pop("otp", None)
-        return "ok"
-    return "bad"
-
-
-def otp_error(status):
-    msg = {
-        "fail": "OTP could not be sent. Please try again in a minute.",
-        "wait": "Please wait 30 seconds before asking for a new OTP.",
-        "limit": "Too many OTP requests for this number. Try again after 1 hour.",
-    }.get(status)
-    if msg:
-        st.error(t(msg))
+        row = c.execute("SELECT photo FROM users WHERE id = ?", (int(uid),)).fetchone()
+    return row["photo"] if row else None
 
 
 # ---- users
@@ -1485,14 +1478,28 @@ def user_exists(phone):
         return c.execute("SELECT 1 FROM users WHERE phone = ?", (phone,)).fetchone() is not None
 
 
-def create_user(phone, name, father, age, password):
+def user_status(phone):
+    with closing(users_conn()) as c:
+        row = c.execute("SELECT status FROM users WHERE phone = ?", (phone,)).fetchone()
+    return (row["status"] or "approved") if row else None
+
+
+def set_user_status(uid, status):
+    assert status in ("approved", "rejected", "pending")
+    with closing(users_conn()) as c:
+        c.execute("UPDATE users SET status = ? WHERE id = ?", (status, int(uid)))
+        c.commit()
+
+
+def create_user(phone, name, father, age, password, photo=None, status="pending"):
+    """Naya account 'pending' banta hai. Admin approve kare tabhi login chalega."""
     salt, h = hash_pw(password)
     with closing(users_conn()) as c:
         try:
             cur = c.execute(
-                "INSERT INTO users(phone, name, father_name, age, pw_salt, pw_hash, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (phone, name, father, int(age), salt, h, date.today().isoformat()),
+                "INSERT INTO users(phone, name, father_name, age, pw_salt, pw_hash, created_at, status, photo) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (phone, name, father, int(age), salt, h, date.today().isoformat(), status, photo),
             )
             c.commit()
         except sqlite3.IntegrityError:
@@ -1501,7 +1508,7 @@ def create_user(phone, name, father, age, password):
 
 
 def login_user(phone, password):
-    """('ok', row) | ('locked', None) | ('bad', None)"""
+    """('ok', row) | ('locked', None) | ('bad', None) | ('pending', None) | ('rejected', None)"""
     with closing(users_conn()) as c:
         row = c.execute("SELECT * FROM users WHERE phone = ?", (phone,)).fetchone()
         if row is None:
@@ -1510,6 +1517,8 @@ def login_user(phone, password):
         if row["locked_until"] and row["locked_until"] > time.time():
             return "locked", None
         if check_pw(password, row["pw_salt"], row["pw_hash"]):
+            if (row["status"] or "approved") != "approved":
+                return (row["status"] or "pending"), None
             c.execute("UPDATE users SET fails = 0, locked_until = 0, last_login = ? WHERE id = ?",
                       (date.today().isoformat(), row["id"]))
             c.commit()
@@ -1577,6 +1586,10 @@ def user_login_form():
             st.rerun()
         elif status == "locked":
             st.error(t("Too many wrong attempts. Try again after 10 minutes."))
+        elif status == "pending":
+            st.warning(t("Your account is waiting for admin approval. Please try again after the admin approves it."))
+        elif status == "rejected":
+            st.error(t("Your account request was not approved. Please contact the admin."))
         else:
             st.error(t("Incorrect mobile number or password."))
 
@@ -1594,88 +1607,75 @@ def login_ui():
         user_login_form()
 
 
-def otp_step_ui(purpose, phone, on_reset):
-    """OTP daalne ka box. True tab milta hai jab OTP sahi ho."""
-    o = st.session_state.get("otp")
-    st.success(tf("OTP sent to +91 {p}", p=mask_phone(phone)))
-    if o and o.get("demo"):
-        st.warning(tf("Demo mode: the SMS service is not set up, so the OTP is shown here: {o}", o=o["demo"]))
-    with st.form(f"otp_form_{purpose}"):
-        code = st.text_input(t("Enter the 6-digit OTP"), max_chars=6, placeholder="123456")
-        ok = st.form_submit_button(t("Verify OTP"), use_container_width=True, type="primary")
-    c1, c2 = st.columns(2)
-    if c1.button(t("Resend OTP"), key=f"resend_{purpose}", use_container_width=True):
-        s = otp_issue(purpose, phone)
-        if s in ("sent", "demo"):
-            st.rerun()
-        otp_error(s)
-    if c2.button(t("Change number"), key=f"change_{purpose}", use_container_width=True):
-        on_reset()
-        st.rerun()
-    if ok:
-        res = otp_check(purpose, phone, code)
-        if res == "ok":
-            return True
-        if res == "bad":
-            left = max(0, OTP_MAX_TRIES - st.session_state.get("otp", {}).get("tries", OTP_MAX_TRIES))
-            st.error(tf("Wrong OTP. {n} tries left.", n=left))
-        elif res == "locked":
-            st.error(t("Too many wrong OTPs. Tap Resend OTP to get a new one."))
-        else:
-            st.error(t("OTP expired. Tap Resend OTP to get a new one."))
-    return False
-
-
 def _reg_reset():
     st.session_state.pop("reg", None)
-    st.session_state.pop("otp", None)
+
+
+def goto_login():
+    st.session_state["auth_mode"] = "Login"
+    st.session_state.pop("reg_done", None)
 
 
 def register_ui():
+    """Naya account: phone -> details + photo -> password -> admin ki manzoori ka intezaar."""
+    if st.session_state.get("reg_done"):
+        st.success(t("Your request has been sent to the admin. You can log in after the admin approves it."))
+        st.button("🔑 " + t("Go to Login"), key="go_login", on_click=goto_login, use_container_width=True)
+        return
     reg = st.session_state.setdefault("reg", {"step": 1})
     step = reg["step"]
-    if step >= 3 and not reg.get("verified"):
+    if step >= 2 and not reg.get("phone"):
         _reg_reset()
         st.rerun()
     st.markdown(t("#### 🆕 Create account"))
-    st.caption(tf("Step {n} of 4", n=step))
+    st.caption(tf("Step {n} of 3", n=step))
+    st.info(t("A new account is created only after the admin verifies it."))
 
     if step == 1:
         with st.form("reg_phone"):
             phone = st.text_input(t("Mobile number"), max_chars=15, placeholder="98XXXXXXXX",
                                   help=t("This number will be your username."))
-            ok = st.form_submit_button(t("Send OTP"), use_container_width=True, type="primary")
+            ok = st.form_submit_button(t("Continue"), use_container_width=True, type="primary")
         if ok:
             ph = norm_phone(phone)
+            st_ = user_status(ph) if valid_phone(ph) else None
             if not valid_phone(ph):
                 st.error(t("Enter a valid 10-digit mobile number."))
-            elif user_exists(ph):
+            elif st_ == "pending":
+                st.warning(t("A request for this number is already waiting for admin approval."))
+            elif st_ == "rejected":
+                st.error(t("Your account request was not approved. Please contact the admin."))
+            elif st_:
                 st.error(t("This number is already registered. Please log in."))
             else:
-                s = otp_issue("reg", ph)
-                if s in ("sent", "demo"):
-                    reg.update(phone=ph, step=2)
-                    st.rerun()
-                otp_error(s)
+                reg.update(phone=ph, step=2)
+                st.rerun()
 
     elif step == 2:
-        if otp_step_ui("reg", reg["phone"], _reg_reset):
-            reg.update(verified=True, step=3)
-            st.rerun()
-
-    elif step == 3:
-        st.success("✅ " + tf("Number verified: {p}", p=reg["phone"]))
+        st.info(tf("Username: {p}", p=reg["phone"]))
         with st.form("reg_profile"):
             name = st.text_input(t("Full name"))
             father = st.text_input(t("Father's name"))
             age = st.number_input(t("Age"), min_value=18, max_value=100, value=18, step=1)
+            pic = st.file_uploader(t("Your photo"), type=["jpg", "jpeg", "png"],
+                                   help=t("Take a clear photo of your face, or choose one from the gallery."))
             ok = st.form_submit_button(t("Save and continue"), use_container_width=True, type="primary")
         if ok:
             name, father = clean_name(name), clean_name(father)
+            photo = None
+            if pic is not None:
+                try:
+                    photo = process_photo(pic.getvalue())
+                except ValueError:
+                    photo = None
             if not valid_name(name) or not valid_name(father):
                 st.error(t("Enter a valid name and father's name."))
+            elif pic is None:
+                st.error(t("Please add your photo."))
+            elif photo is None:
+                st.error(t("This photo could not be read. Please choose a JPG or PNG image."))
             else:
-                reg.update(profile={"name": name, "father": father, "age": int(age)}, step=4)
+                reg.update(profile={"name": name, "father": father, "age": int(age), "photo": photo}, step=3)
                 st.rerun()
 
     else:
@@ -1683,76 +1683,37 @@ def register_ui():
         if not p:
             _reg_reset()
             st.rerun()
-        st.info(tf("Username: {p}", p=reg["phone"]))
+        c1, c2 = st.columns([1, 4])
+        c1.markdown(photo_html(p["photo"], 72, p["name"]), unsafe_allow_html=True)
+        c2.markdown(f"**{escape(p['name'])}**  \n{escape(reg['phone'])}")
         with st.form("reg_password"):
             pw = st.text_input(t("Create password"), type="password", help=t("At least 6 characters."))
             pw2 = st.text_input(t("Confirm password"), type="password")
-            ok = st.form_submit_button(t("OK, create my account"), use_container_width=True, type="primary")
+            ok = st.form_submit_button(t("OK, send my request"), use_container_width=True, type="primary")
         if ok:
             if len(pw) < MIN_PASSWORD:
                 st.error(t("Password must be at least 6 characters."))
             elif pw != pw2:
                 st.error(t("Both passwords must be the same."))
             else:
-                row = create_user(reg["phone"], p["name"], p["father"], p["age"], pw)
+                row = create_user(reg["phone"], p["name"], p["father"], p["age"], pw, photo=p["photo"])
                 if row is None:
                     st.error(t("This number is already registered. Please log in."))
                 else:
-                    start_session(row)
-                    st.session_state["welcome"] = tf("Account created. Your username is {p}.", p=row["phone"])
+                    _reg_reset()
+                    st.session_state["reg_done"] = True
                     st.rerun()
-
-
-def _fp_reset():
-    st.session_state.pop("fp", None)
-    st.session_state.pop("otp", None)
 
 
 def forgot_ui():
-    fp = st.session_state.setdefault("fp", {"step": 1})
     st.markdown(t("#### 🔁 Forgot password"))
-    if fp["step"] >= 3 and not fp.get("verified"):
-        _fp_reset()
-        st.rerun()
-    if fp["step"] == 1:
-        with st.form("fp_phone"):
-            phone = st.text_input(t("Mobile number"), max_chars=15, placeholder="98XXXXXXXX")
-            ok = st.form_submit_button(t("Send OTP"), use_container_width=True, type="primary")
-        if ok:
-            ph = norm_phone(phone)
-            if not valid_phone(ph):
-                st.error(t("Enter a valid 10-digit mobile number."))
-            elif not user_exists(ph):
-                st.error(t("This number is not registered. Please create an account."))
-            else:
-                s = otp_issue("fp", ph)
-                if s in ("sent", "demo"):
-                    fp.update(phone=ph, step=2)
-                    st.rerun()
-                otp_error(s)
-    elif fp["step"] == 2:
-        if otp_step_ui("fp", fp["phone"], _fp_reset):
-            fp.update(verified=True, step=3)
-            st.rerun()
-    else:
-        with st.form("fp_new"):
-            pw = st.text_input(t("New password"), type="password", help=t("At least 6 characters."))
-            pw2 = st.text_input(t("Confirm password"), type="password")
-            ok = st.form_submit_button(t("Change password"), use_container_width=True, type="primary")
-        if ok:
-            if len(pw) < MIN_PASSWORD:
-                st.error(t("Password must be at least 6 characters."))
-            elif pw != pw2:
-                st.error(t("Both passwords must be the same."))
-            else:
-                with closing(users_conn()) as c:
-                    row = c.execute("SELECT id FROM users WHERE phone = ?", (fp["phone"],)).fetchone()
-                if row:
-                    set_user_password(row["id"], pw)
-                _fp_reset()
-                st.session_state["auth_mode"] = "Login"
-                st.session_state["pw_changed"] = True
-                st.rerun()
+    st.info(t("To reset your password, please contact the admin. The admin can set a new password for you."))
+    try:
+        contact = st.secrets.get("ADMIN_CONTACT")
+    except Exception:
+        contact = None
+    if contact:
+        st.success("📞 " + str(contact))
 
 
 def admin_credentials():
@@ -1800,8 +1761,6 @@ def auth_gate():
     with mid:
         hero("Balance Sheet", "Sign in, or create your own account.")
         language_picker(save=False)
-        if st.session_state.pop("pw_changed", False):
-            st.success(t("Password changed. Please log in."))
         mode = st.radio(
             t("Account"), AUTH_MODES, horizontal=True, key="auth_mode", label_visibility="collapsed",
             format_func=lambda x: AUTH_ICONS[x] + t(x),
@@ -1813,7 +1772,13 @@ def auth_gate():
 def account_bar():
     a = st.session_state["auth"]
     c1, c2 = st.columns([4, 1])
-    c1.markdown(f"👤 **{escape(a['name'])}** · {escape(a['phone'])}")
+    c1.markdown(
+        '<div style="display:flex;align-items:center;gap:12px;">'
+        + photo_html(user_photo(a["uid"]), 52, a["name"])
+        + f'<div><div style="font-weight:700;font-size:1.1rem;color:#0f3d4c;">{escape(a["name"])}</div>'
+        + f'<div style="font-size:.9rem;color:#6b7885;">📱 {escape(a["phone"])}</div></div></div>',
+        unsafe_allow_html=True,
+    )
     c2.button(t("Logout"), key="logout_btn", on_click=logout, use_container_width=True)
 
 
@@ -1821,7 +1786,7 @@ def account_bar():
 def users_df():
     with closing(sqlite3.connect(USERS_DB)) as c:
         return pd.read_sql_query(
-            "SELECT id, phone, name, father_name, age, created_at, last_login "
+            "SELECT id, phone, name, father_name, age, status, created_at, last_login "
             "FROM users ORDER BY id DESC", c)
 
 
@@ -1878,6 +1843,39 @@ def restore_all_data(raw):
     return n
 
 
+def admin_pending_section():
+    """Naye account ki requests: photo aur details dekhkar Approve / Reject."""
+    with closing(users_conn()) as c:
+        rows = c.execute(
+            "SELECT id, phone, name, father_name, age, created_at, photo FROM users "
+            "WHERE status = 'pending' ORDER BY id"
+        ).fetchall()
+    st.markdown(t("#### 🕒 Pending requests") + f" ({len(rows)})")
+    if not rows:
+        st.caption(t("No pending requests."))
+        return
+    st.warning(tf("{n} account request(s) are waiting for your approval.", n=len(rows)))
+    father_label = t("Father's name")
+    for r in rows:
+        with st.container(border=True):
+            c1, c2 = st.columns([1, 3])
+            c1.markdown(photo_html(r["photo"], 96, r["name"]), unsafe_allow_html=True)
+            c2.markdown(
+                f"**{escape(r['name'])}**  \n"
+                f"{father_label}: {escape(r['father_name'])}  \n"
+                f"{t('Age')}: {r['age']} · 📱 {escape(r['phone'])} · {r['created_at']}"
+            )
+            b1, b2 = st.columns(2)
+            if b1.button("✅ " + t("Approve"), key=f"ap_{r['id']}", type="primary", use_container_width=True):
+                set_user_status(r["id"], "approved")
+                st.session_state["admin_flash"] = "User approved."
+                st.rerun()
+            if b2.button("❌ " + t("Reject"), key=f"rj_{r['id']}", use_container_width=True):
+                set_user_status(r["id"], "rejected")
+                st.session_state["admin_flash"] = "Request rejected."
+                st.rerun()
+
+
 def admin_console():
     hero("Admin — all users", "Every person's profile and ledger")
     c1, c2 = st.columns([4, 1])
@@ -1894,6 +1892,7 @@ def admin_console():
     m1.metric(t("Total users"), len(df))
     m2.metric(t("Joined today"), int((df["created_at"] == date.today().isoformat()).sum()) if not df.empty else 0)
 
+    admin_pending_section()
     st.markdown(t("#### All users"))
     if df.empty:
         st.caption(t("No users yet."))
@@ -1902,7 +1901,7 @@ def admin_console():
         view["entries"] = [count_entries(user_db_path(i)) for i in df["id"]]
         view = view.rename(columns={
             "id": "ID", "phone": "Mobile", "name": "Name", "father_name": "Father's name", "age": "Age",
-            "created_at": "Joined", "last_login": "Last login", "entries": "Entries",
+            "status": "Status", "created_at": "Joined", "last_login": "Last login", "entries": "Entries",
         })
         show_df(view, hide_index=True, use_container_width=True)
 
@@ -1912,6 +1911,20 @@ def admin_console():
         uid = st.selectbox(t("Select user"), ids, format_func=lambda i: names[i], key="adm_user")
         if st.button("📂 " + t("Open this user's ledger"), type="primary", use_container_width=True, key="adm_open"):
             open_ledger(user_db_path(uid), names[uid])
+            st.rerun()
+        cur = df[df["id"] == uid].iloc[0]
+        pc1, pc2 = st.columns([1, 4])
+        pc1.markdown(photo_html(user_photo(uid), 72, cur["name"]), unsafe_allow_html=True)
+        status_label = t("Status")
+        pc2.markdown(f"**{escape(cur['name'])}**  \n{status_label}: {t(cur['status'] or 'approved')}")
+        sb1, sb2 = st.columns(2)
+        if sb1.button("✅ " + t("Approve"), key="adm_set_ok", use_container_width=True, disabled=(cur["status"] == "approved")):
+            set_user_status(uid, "approved")
+            st.session_state["admin_flash"] = "User approved."
+            st.rerun()
+        if sb2.button("⛔ " + t("Block"), key="adm_set_block", use_container_width=True, disabled=(cur["status"] == "rejected")):
+            set_user_status(uid, "rejected")
+            st.session_state["admin_flash"] = "User blocked."
             st.rerun()
         with st.expander(t("Reset this user's password")):
             with st.form("adm_reset"):
