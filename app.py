@@ -2746,60 +2746,71 @@ def loan_section():
         unsafe_allow_html=True,
     )
     st.write("")
-    for start in range(0, len(items), 3):
-        cols = st.columns(3)
-        for col, (l, i) in zip(cols, items[start:start + 3]):
-            with col, st.container(border=True):
-                if i["overdue"]:
-                    cls, label = "r", tf("{n} overdue", n=len(i['overdue']))
-                elif i["pending"] <= 0.005 and i["pen_due"] > 0.005:
-                    cls, label = "r", t("Penalty due")
-                elif i["pending"] <= 0.005:
-                    cls, label = "g", t("Fully paid")
-                else:
-                    cls, label = "g", t("On schedule")
-                nxt = i["next"]
-                nxt_txt = tf("next due {d}", d=fdate(nxt['due'])) if nxt else t("all instalments paid")
-                meta_a = tf("{k} × {n} instalments, {nxt}", k=inr(l["kist_amount"]),
-                            n=int(l["total_kists"]), nxt=nxt_txt)
-                meta_b = tf("{a} of {b} instalments paid", a=i["paid_cnt"], b=int(l["total_kists"]))
-                out_lbl = t("Outstanding (incl. penalty)")
+    def _toggle_sched(lid):
+        k = f"loan_sched_{lid}"
+        st.session_state[k] = not st.session_state.get(k, False)
+
+    for l, i in items:
+        col, side = st.columns([1, 1.5])
+        with col, st.container(border=True):
+            if i["overdue"]:
+                cls, label = "r", tf("{n} overdue", n=len(i['overdue']))
+            elif i["pending"] <= 0.005 and i["pen_due"] > 0.005:
+                cls, label = "r", t("Penalty due")
+            elif i["pending"] <= 0.005:
+                cls, label = "g", t("Fully paid")
+            else:
+                cls, label = "g", t("On schedule")
+            nxt = i["next"]
+            nxt_txt = tf("next due {d}", d=fdate(nxt['due'])) if nxt else t("all instalments paid")
+            meta_a = tf("{k} × {n} instalments, {nxt}", k=inr(l["kist_amount"]),
+                        n=int(l["total_kists"]), nxt=nxt_txt)
+            meta_b = tf("{a} of {b} instalments paid", a=i["paid_cnt"], b=int(l["total_kists"]))
+            out_lbl = t("Outstanding (incl. penalty)")
+            st.markdown(
+                f'<div class="pcard-top">{avatar(l["name"])}<div>'
+                f'<div class="pname">{escape(l["name"])}</div>'
+                f'<div class="pmeta">{meta_a}</div>'
+                f'</div></div>'
+                f'<div class="pmeta" style="margin-top:8px">{out_lbl}</div>'
+                f'<div class="pamt" style="margin-top:0">{inr(i["pending"] + i["pen_due"])}</div>'
+                f'<span class="chip {cls}">{label}</span>'
+                f'<div class="pmeta" style="margin-top:6px">{meta_b}</div>',
+                unsafe_allow_html=True,
+            )
+            if i["pen_due"] > 0.005:
                 st.markdown(
-                    f'<div class="pcard-top">{avatar(l["name"])}<div>'
-                    f'<div class="pname">{escape(l["name"])}</div>'
-                    f'<div class="pmeta">{meta_a}</div>'
-                    f'</div></div>'
-                    f'<div class="pmeta" style="margin-top:8px">{out_lbl}</div>'
-                    f'<div class="pamt" style="margin-top:0">{inr(i["pending"] + i["pen_due"])}</div>'
-                    f'<span class="chip {cls}">{label}</span>'
-                    f'<div class="pmeta" style="margin-top:6px">{meta_b}</div>',
+                    f'<div class="neg" style="font-weight:700;font-size:.85rem">'
+                    f'{tf("Penalty due: {v}", v=inr(i["pen_due"]))}</div>',
                     unsafe_allow_html=True,
                 )
-                if i["pen_due"] > 0.005:
-                    st.markdown(
-                        f'<div class="neg" style="font-weight:700;font-size:.85rem">'
-                        f'{tf("Penalty due: {v}", v=inr(i["pen_due"]))}</div>',
-                        unsafe_allow_html=True,
-                    )
-                st.caption(
-                    tf("Instalments due {a} + penalty {b}", a=inr(i['pending']), b=inr(i['pen_due']))
+            st.caption(
+                tf("Instalments due {a} + penalty {b}", a=inr(i['pending']), b=inr(i['pen_due']))
+            )
+            st.progress(min(i["paid"] / i["total"], 1.0) if i["total"] else 0.0)
+            is_open = st.session_state.get(f"loan_sched_{l['id']}", False)
+            st.button(
+                ("▼ " if is_open else "▶ ") + t("Instalment schedule"), key=f"loan_sched_btn_{l['id']}",
+                on_click=_toggle_sched, args=(l["id"],), use_container_width=True,
+                type="primary" if is_open else "secondary",
+            )
+        if is_open:
+            with side, st.container(border=True):
+                st.markdown(f"**{escape(l['name'])}** · " + t("Instalment schedule"))
+                tbl = pd.DataFrame([
+                    {
+                        "No.": r["no"],
+                        "Due date": r["due"].isoformat(),
+                        "Paid on": r["paid_on"].isoformat() if r["paid_on"] else "—",
+                        "Days late": r["late"],
+                        "Penalty": r["penalty"],
+                    }
+                    for r in i["rows"]
+                ])
+                show_df(
+                    tbl, hide_index=True, use_container_width=True,
+                    column_config={"Penalty": st.column_config.NumberColumn(format="₹%.2f")},
                 )
-                st.progress(min(i["paid"] / i["total"], 1.0) if i["total"] else 0.0)
-                with st.expander(t("Instalment schedule")):
-                    tbl = pd.DataFrame([
-                        {
-                            "No.": r["no"],
-                            "Due date": r["due"].isoformat(),
-                            "Paid on": r["paid_on"].isoformat() if r["paid_on"] else "—",
-                            "Days late": r["late"],
-                            "Penalty": r["penalty"],
-                        }
-                        for r in i["rows"]
-                    ])
-                    show_df(
-                        tbl, hide_index=True, use_container_width=True,
-                        column_config={"Penalty": st.column_config.NumberColumn(format="₹%.2f")},
-                    )
 
 
 def page_dashboard():
