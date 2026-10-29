@@ -1,6 +1,6 @@
 """Balance Sheet - personal ledger for lending, borrowing, income and loan instalments.
 
-Three pages: Dashboard, New entry, Admin panel (Edit records, Backup & restore are inside it, behind the password).
+Pages: Dashboard, My Savings, New entry, Settings (Edit records, Backup & restore, Profile update are inside it).
 """
 
 import base64
@@ -70,7 +70,7 @@ BLUE = "#0f3d4c"
 
 P_DASH = "Dashboard"
 P_NEW = "New entry"
-P_EDIT = "Edit & Backup"
+P_EDIT = "Settings"
 P_SAVE = "My Savings"
 PAGES = [P_DASH, P_SAVE, P_NEW, P_EDIT]  # Admin panel is always last
 
@@ -579,7 +579,40 @@ HI = {
 }
 
 NEW_HI = {
-    "Edit & Backup": "संपादन और बैकअप",
+    "Settings": "सेटिंग्स",
+    "Profile": "प्रोफ़ाइल",
+    "Profile update": "प्रोफ़ाइल अपडेट",
+    "Your current details": "आपकी मौजूदा जानकारी",
+    "#### 🔒 Change password": "#### 🔒 पासवर्ड बदलें",
+    "#### 👤 Update profile details": "#### 👤 प्रोफ़ाइल की जानकारी बदलें",
+    "Current password": "मौजूदा पासवर्ड",
+    "New password": "नया पासवर्ड",
+    "Current password is incorrect.": "मौजूदा पासवर्ड गलत है।",
+    "New password must be different from the current one.": "नया पासवर्ड मौजूदा पासवर्ड से अलग होना चाहिए।",
+    "Password updated.": "पासवर्ड बदल गया।",
+    "Password changes take effect immediately.": "पासवर्ड तुरंत बदल जाता है।",
+    "Name, father's name, age and photo changes are applied only after the admin verifies them. Until then your old details stay.":
+        "नाम, पिता का नाम, उम्र और फ़ोटो में बदलाव एडमिन के जाँचने के बाद ही लागू होते हैं। तब तक पुरानी जानकारी ही रहेगी।",
+    "Your photo (leave empty to keep the current one)": "आपकी फ़ोटो (खाली छोड़ें तो पुरानी रहेगी)",
+    "Send for verification": "जाँच के लिए भेजें",
+    "No change found. Edit a detail first.": "कोई बदलाव नहीं मिला। पहले कोई जानकारी बदलें।",
+    "Your update request has been sent to the admin. Until it is approved, your old details stay.":
+        "आपकी बदलाव रिक्वेस्ट एडमिन को भेज दी गई है। मंज़ूर होने तक पुरानी जानकारी रहेगी।",
+    "Waiting for admin approval": "एडमिन की मंज़ूरी का इंतज़ार",
+    "Requested details": "माँगी गई नई जानकारी",
+    "Cancel request": "रिक्वेस्ट रद्द करें",
+    "Request cancelled.": "रिक्वेस्ट रद्द हो गई।",
+    "Profile settings are only for user accounts.": "प्रोफ़ाइल सेटिंग सिर्फ़ यूज़र खाते के लिए है।",
+    "#### ✏️ Profile update requests": "#### ✏️ प्रोफ़ाइल बदलाव रिक्वेस्ट",
+    "No profile update requests.": "कोई प्रोफ़ाइल बदलाव रिक्वेस्ट नहीं है।",
+    "{n} profile update request(s) are waiting for your verification.":
+        "{n} प्रोफ़ाइल बदलाव रिक्वेस्ट आपकी जाँच का इंतज़ार कर रही हैं।",
+    "Old": "पुराना", "New": "नया",
+    "Profile update approved.": "प्रोफ़ाइल बदलाव मंज़ूर हो गया।",
+    "Profile update rejected.": "प्रोफ़ाइल बदलाव अस्वीकार हो गया।",
+    "Section": "विभाग",
+    "Transactions, editing of older records, backup & restore, profile":
+        "लेन-देन, पुराने रिकॉर्ड में बदलाव, बैकअप और रिस्टोर, प्रोफ़ाइल",
     "Sign in, or create your own account.": "साइन इन करें, या अपना खाता बनाएँ।",
     "Login": "लॉगिन", "Create account": "खाता बनाएँ", "Forgot password": "पासवर्ड भूल गए",
     "Account": "खाता",
@@ -1358,6 +1391,18 @@ def init_users_db():
             );
             """
         )
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS profile_requests(
+                user_id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                father_name TEXT NOT NULL,
+                age INTEGER NOT NULL,
+                photo BLOB,
+                requested_at TEXT NOT NULL
+            )
+            """
+        )
         cols = [r[1] for r in c.execute("PRAGMA table_info(users)")]
         if "status" not in cols:  # purane users pehle se approved maane jayenge
             c.execute("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'approved'")
@@ -1769,13 +1814,62 @@ def auth_gate():
     return False
 
 
+def user_profile(uid):
+    with closing(users_conn()) as c:
+        return c.execute(
+            "SELECT id, phone, name, father_name, age, photo FROM users WHERE id = ?", (int(uid),)
+        ).fetchone()
+
+
+def get_profile_request(uid):
+    with closing(users_conn()) as c:
+        return c.execute("SELECT * FROM profile_requests WHERE user_id = ?", (int(uid),)).fetchone()
+
+
+def save_profile_request(uid, name, father, age, photo):
+    """Naya request pehle wale ko replace karta hai. photo None ho to purani photo hi rahegi."""
+    with closing(users_conn()) as c:
+        c.execute(
+            "INSERT INTO profile_requests(user_id, name, father_name, age, photo, requested_at) "
+            "VALUES (?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET name = excluded.name, "
+            "father_name = excluded.father_name, age = excluded.age, photo = excluded.photo, "
+            "requested_at = excluded.requested_at",
+            (int(uid), name, father, int(age), photo, date.today().isoformat()),
+        )
+        c.commit()
+
+
+def delete_profile_request(uid):
+    with closing(users_conn()) as c:
+        c.execute("DELETE FROM profile_requests WHERE user_id = ?", (int(uid),))
+        c.commit()
+
+
+def apply_profile_request(uid):
+    """Admin ke approve karne par naya data asli profile me chala jata hai."""
+    req = get_profile_request(uid)
+    if req is None:
+        return
+    with closing(users_conn()) as c:
+        if req["photo"] is not None:
+            c.execute("UPDATE users SET name=?, father_name=?, age=?, photo=? WHERE id=?",
+                      (req["name"], req["father_name"], int(req["age"]), req["photo"], int(uid)))
+        else:
+            c.execute("UPDATE users SET name=?, father_name=?, age=? WHERE id=?",
+                      (req["name"], req["father_name"], int(req["age"]), int(uid)))
+        c.execute("DELETE FROM profile_requests WHERE user_id = ?", (int(uid),))
+        c.commit()
+
+
 def account_bar():
     a = st.session_state["auth"]
+    prof = user_profile(a["uid"])
+    shown_name = prof["name"] if prof else a["name"]  # admin ke approve karne ke baad naya naam dikhe
     c1, c2 = st.columns([4, 1])
     c1.markdown(
         '<div style="display:flex;align-items:center;gap:12px;">'
-        + photo_html(user_photo(a["uid"]), 52, a["name"])
-        + f'<div><div style="font-weight:700;font-size:1.1rem;color:#0f3d4c;">{escape(a["name"])}</div>'
+        + photo_html(user_photo(a["uid"]), 52, shown_name)
+        + f'<div><div style="font-weight:700;font-size:1.1rem;color:#0f3d4c;">{escape(shown_name)}</div>'
         + f'<div style="font-size:.9rem;color:#6b7885;">📱 {escape(a["phone"])}</div></div></div>',
         unsafe_allow_html=True,
     )
@@ -1876,6 +1970,43 @@ def admin_pending_section():
                 st.rerun()
 
 
+def admin_profile_requests_section():
+    """Users ke profile badlav (naam, pita ka naam, umar, photo): admin verify kare tabhi lagu hote hain."""
+    with closing(users_conn()) as c:
+        rows = c.execute(
+            "SELECT r.user_id, r.name, r.father_name, r.age, r.photo, r.requested_at, "
+            "u.phone, u.name AS old_name, u.father_name AS old_father, u.age AS old_age, u.photo AS old_photo "
+            "FROM profile_requests r JOIN users u ON u.id = r.user_id ORDER BY r.requested_at, r.user_id"
+        ).fetchall()
+    st.markdown(t("#### ✏️ Profile update requests") + f" ({len(rows)})")
+    if not rows:
+        st.caption(t("No profile update requests."))
+        return
+    st.warning(tf("{n} profile update request(s) are waiting for your verification.", n=len(rows)))
+    father_label = t("Father's name")
+    for r in rows:
+        uid = int(r["user_id"])
+        with st.container(border=True):
+            st.markdown(f"📱 **{escape(r['phone'])}** · {r['requested_at']}")
+            o, n = st.columns(2)
+            o.markdown(f"**{t('Old')}**")
+            o.markdown(photo_html(r["old_photo"], 72, r["old_name"]), unsafe_allow_html=True)
+            o.markdown(f"{escape(r['old_name'])}  \n{father_label}: {escape(r['old_father'])}  \n{t('Age')}: {r['old_age']}")
+            n.markdown(f"**{t('New')}**")
+            n.markdown(photo_html(r["photo"] if r["photo"] is not None else r["old_photo"], 72, r["name"]),
+                       unsafe_allow_html=True)
+            n.markdown(f"{escape(r['name'])}  \n{father_label}: {escape(r['father_name'])}  \n{t('Age')}: {r['age']}")
+            b1, b2 = st.columns(2)
+            if b1.button("✅ " + t("Approve"), key=f"pr_ap_{uid}", type="primary", use_container_width=True):
+                apply_profile_request(uid)
+                st.session_state["admin_flash"] = "Profile update approved."
+                st.rerun()
+            if b2.button("❌ " + t("Reject"), key=f"pr_rj_{uid}", use_container_width=True):
+                delete_profile_request(uid)
+                st.session_state["admin_flash"] = "Profile update rejected."
+                st.rerun()
+
+
 def admin_console():
     hero("Admin — all users", "Every person's profile and ledger")
     c1, c2 = st.columns([4, 1])
@@ -1893,6 +2024,7 @@ def admin_console():
     m2.metric(t("Joined today"), int((df["created_at"] == date.today().isoformat()).sum()) if not df.empty else 0)
 
     admin_pending_section()
+    admin_profile_requests_section()
     st.markdown(t("#### All users"))
     if df.empty:
         st.caption(t("No users yet."))
@@ -1943,6 +2075,7 @@ def admin_console():
             if st.button(t("Delete user"), key="adm_del", disabled=norm_phone(word) != row["phone"]):
                 with closing(users_conn()) as c:
                     c.execute("DELETE FROM users WHERE id = ?", (int(uid),))
+                    c.execute("DELETE FROM profile_requests WHERE user_id = ?", (int(uid),))
                     c.commit()
                 user_db_path(uid).unlink(missing_ok=True)
                 st.session_state["admin_flash"] = "User deleted."
@@ -4297,9 +4430,113 @@ def admin_transactions():
     st.caption(t("To correct or delete an entry, open 'Edit records' above."))
 
 
+def profile_section():
+    """Password turant badalta hai. Naam / pita ka naam / umar / photo admin ke verify karne par hi badlenge."""
+    a = st.session_state.get("auth", {})
+    if a.get("role") != "user":
+        st.info(t("Profile settings are only for user accounts."))
+        return
+    uid = a["uid"]
+    prof = user_profile(uid)
+    if prof is None:
+        return
+    flash = st.session_state.pop("profile_flash", None)
+    if flash:
+        st.success(t(flash))
+
+    # ---- current details
+    st.markdown("#### 👤 " + t("Your current details"))
+    fl = t("Father's name")
+    c1, c2 = st.columns([1, 4])
+    c1.markdown(photo_html(prof["photo"], 72, prof["name"]), unsafe_allow_html=True)
+    c2.markdown(
+        f"**{escape(prof['name'])}**  \n{fl}: {escape(prof['father_name'])}  \n"
+        f"{t('Age')}: {prof['age']} · 📱 {escape(prof['phone'])}"
+    )
+
+    # ---- change password (immediate)
+    st.markdown(t("#### 🔒 Change password"))
+    st.caption(t("Password changes take effect immediately."))
+    with st.form("pw_change_form", clear_on_submit=True):
+        cur = st.text_input(t("Current password"), type="password")
+        n1 = st.text_input(t("New password"), type="password", help=t("At least 6 characters."))
+        n2 = st.text_input(t("Confirm password"), type="password")
+        ok = st.form_submit_button(t("Change password"), type="primary", use_container_width=True)
+    if ok:
+        if not verify_user_password(uid, cur):
+            st.error(t("Current password is incorrect."))
+        elif len(n1) < MIN_PASSWORD:
+            st.error(t("Password must be at least 6 characters."))
+        elif n1 != n2:
+            st.error(t("Both passwords must be the same."))
+        elif n1 == cur:
+            st.error(t("New password must be different from the current one."))
+        else:
+            set_user_password(uid, n1)
+            st.success(t("Password updated."))
+
+    # ---- profile details (admin verification needed)
+    st.markdown(t("#### 👤 Update profile details"))
+    st.info(t("Name, father's name, age and photo changes are applied only after the admin verifies them. Until then your old details stay."))
+    req = get_profile_request(uid)
+    if req is not None:
+        with st.container(border=True):
+            st.markdown("🕒 **" + t("Waiting for admin approval") + "**")
+            st.caption(t("Requested details"))
+            r1, r2 = st.columns([1, 4])
+            r1.markdown(photo_html(req["photo"] if req["photo"] is not None else prof["photo"], 56, req["name"]),
+                        unsafe_allow_html=True)
+            r2.markdown(f"**{escape(req['name'])}**  \n{fl}: {escape(req['father_name'])}  \n"
+                        f"{t('Age')}: {req['age']}")
+            if st.button(t("Cancel request"), key="pr_cancel"):
+                delete_profile_request(uid)
+                st.session_state["profile_flash"] = "Request cancelled."
+                st.rerun()
+    base = req if req is not None else prof
+    with st.form("profile_update_form"):
+        name = st.text_input(t("Full name"), value=base["name"])
+        father = st.text_input(t("Father's name"), value=base["father_name"])
+        age = st.number_input(t("Age"), min_value=18, max_value=100, value=min(max(int(base["age"]), 18), 100), step=1)
+        pic = st.file_uploader(t("Your photo (leave empty to keep the current one)"), type=["jpg", "jpeg", "png"])
+        ok = st.form_submit_button(t("Send for verification"), type="primary", use_container_width=True)
+    if ok:
+        name, father = clean_name(name), clean_name(father)
+        photo = None
+        photo_bad = False
+        if pic is not None:
+            try:
+                photo = process_photo(pic.getvalue())
+            except ValueError:
+                photo_bad = True
+        if not valid_name(name) or not valid_name(father):
+            st.error(t("Enter a valid name and father's name."))
+        elif photo_bad:
+            st.error(t("This photo could not be read. Please choose a JPG or PNG image."))
+        elif (photo is None and name == prof["name"] and father == prof["father_name"]
+              and int(age) == int(prof["age"])):
+            st.info(t("No change found. Edit a detail first."))
+        else:
+            if photo is None and req is not None:
+                photo = req["photo"]  # pehle bheji hui nayi photo na hat jaye
+            save_profile_request(uid, name, father, int(age), photo)
+            st.session_state["profile_flash"] = "Your update request has been sent to the admin. Until it is approved, your old details stay."
+            st.rerun()
+
+
 def page_admin():
-    hero(P_EDIT, "Transactions, editing of older records, backup & restore")
+    hero(P_EDIT, "Transactions, editing of older records, backup & restore, profile")
     language_picker()
+    is_user = st.session_state.get("auth", {}).get("role") == "user"
+    options = ["Transactions", "Edit records", "Backup & restore"] + (["Profile"] if is_user else [])
+    icons = {"Transactions": "💸 ", "Edit records": "✏️ ", "Backup & restore": "💾 ", "Profile": "👤 "}
+    section = st.radio(
+        t("Section"), options, horizontal=True,
+        key="admin_section", label_visibility="collapsed",
+        format_func=lambda x: icons[x] + t(x if x != "Profile" else "Profile update"),
+    )
+    if section == "Profile":
+        profile_section()  # password badalne ke liye alag se lock nahi
+        return
     if not edit_gate():
         return
     c1, c2 = st.columns([5, 1])
@@ -4308,11 +4545,6 @@ def page_admin():
     flash = st.session_state.pop("flash", None)
     if flash:
         st.success(t(flash))
-    section = st.radio(
-        t("Section"), ["Transactions", "Edit records", "Backup & restore"], horizontal=True,
-        key="admin_section", label_visibility="collapsed",
-        format_func=lambda x: {"Transactions": "💸 ", "Edit records": "✏️ ", "Backup & restore": "💾 "}[x] + t(x),
-    )
     if section == "Transactions":
         admin_transactions()
         return
