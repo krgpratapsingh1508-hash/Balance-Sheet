@@ -682,6 +682,14 @@ NEW_HI = {
     "Full name": "पूरा नाम", "Father's name": "पिता का नाम", "Age": "उम्र",
     "Save and continue": "सेव करें और आगे बढ़ें",
     "Enter a valid name and father's name.": "सही नाम और पिता का नाम डालें।",
+    "Write names in": "नाम किस भाषा में लिखेंगे",
+    "English": "English", "Hindi": "हिन्दी",
+    "Write the name and father's name in English letters (A-Z) only.":
+        "नाम और पिता का नाम सिर्फ़ अंग्रेज़ी अक्षरों (A-Z) में लिखें।",
+    "Write the name and father's name in Hindi (Devanagari) letters only.":
+        "नाम और पिता का नाम सिर्फ़ हिन्दी (देवनागरी) अक्षरों में लिखें।",
+    "e.g. Ramesh Kumar": "जैसे: Ramesh Kumar",
+    "e.g. रमेश कुमार": "जैसे: रमेश कुमार",
     "Username: {p}": "यूज़र नाम: {p}",
     "Create password": "पासवर्ड बनाएँ", "Confirm password": "पासवर्ड दोबारा डालें",
     "At least 6 characters.": "कम से कम 6 अक्षर।",
@@ -1484,6 +1492,32 @@ def valid_name(s):
     return len(s) >= 2 and not re.search(r"\d", s)
 
 
+def has_devanagari(s):
+    return bool(re.search(r"[\u0900-\u097F]", s or ""))
+
+
+def name_ok_in(s, nl):
+    """nl='en': English letters only. nl='hi': Hindi (Devanagari) only."""
+    if not valid_name(s):
+        return False
+    if nl == "hi":
+        return has_devanagari(s) and not re.search(r"[A-Za-z]", s)
+    return bool(re.search(r"[A-Za-z]", s)) and not has_devanagari(s)
+
+
+def name_lang_picker(key, *texts):
+    """English / Hindi choice for the name fields (kept outside st.form so the hint updates at once)."""
+    default = "hi" if any(has_devanagari(x) for x in texts) or (lang() == "hi" and not any(texts)) else "en"
+    return st.radio(
+        t("Write names in"), ["en", "hi"], index=["en", "hi"].index(default), horizontal=True,
+        format_func=lambda c: "English" if c == "en" else "हिन्दी", key=key,
+    )
+
+
+def name_hint(nl):
+    return t("e.g. रमेश कुमार") if nl == "hi" else t("e.g. Ramesh Kumar")
+
+
 # ---- photo
 def process_photo(raw):
     """Photo ko chhota (320x320, gol karne layak) JPEG bana deta hai. Galat file par ValueError."""
@@ -1708,9 +1742,10 @@ def register_ui():
 
     elif step == 2:
         st.info(tf("Username: {p}", p=reg["phone"]))
+        nl = name_lang_picker("reg_name_lang")
         with st.form("reg_profile"):
-            name = st.text_input(t("Full name"))
-            father = st.text_input(t("Father's name"))
+            name = st.text_input(t("Full name"), placeholder=name_hint(nl))
+            father = st.text_input(t("Father's name"), placeholder=name_hint(nl))
             age = st.number_input(t("Age"), min_value=18, max_value=100, value=18, step=1)
             pic = st.file_uploader(t("Your photo"), type=["jpg", "jpeg", "png"],
                                    help=t("Take a clear photo of your face, or choose one from the gallery."))
@@ -1725,6 +1760,9 @@ def register_ui():
                     photo = None
             if not valid_name(name) or not valid_name(father):
                 st.error(t("Enter a valid name and father's name."))
+            elif not (name_ok_in(name, nl) and name_ok_in(father, nl)):
+                st.error(t("Write the name and father's name in Hindi (Devanagari) letters only.") if nl == "hi"
+                         else t("Write the name and father's name in English letters (A-Z) only."))
             elif pic is None:
                 st.error(t("Please add your photo."))
             elif photo is None:
@@ -4541,9 +4579,10 @@ def profile_section():
         st.markdown(t("#### 👤 Update profile details"))
         st.info(t("Name, father's name, age and photo changes are applied only after the admin verifies them. Until then your old details stay."))
         base = req if req is not None else prof
+        nl = name_lang_picker("prof_name_lang", base["name"], base["father_name"])
         with st.form("profile_update_form"):
-            name = st.text_input(t("Full name"), value=base["name"])
-            father = st.text_input(t("Father's name"), value=base["father_name"])
+            name = st.text_input(t("Full name"), value=base["name"], placeholder=name_hint(nl))
+            father = st.text_input(t("Father's name"), value=base["father_name"], placeholder=name_hint(nl))
             age = st.number_input(t("Age"), min_value=18, max_value=100, value=min(max(int(base["age"]), 18), 100), step=1)
             pic = st.file_uploader(t("Your photo (leave empty to keep the current one)"), type=["jpg", "jpeg", "png"])
             ok = st.form_submit_button(t("Send for verification"), type="primary", use_container_width=True)
@@ -4558,6 +4597,9 @@ def profile_section():
                     photo_bad = True
             if not valid_name(name) or not valid_name(father):
                 st.error(t("Enter a valid name and father's name."))
+            elif not (name_ok_in(name, nl) and name_ok_in(father, nl)):
+                st.error(t("Write the name and father's name in Hindi (Devanagari) letters only.") if nl == "hi"
+                         else t("Write the name and father's name in English letters (A-Z) only."))
             elif photo_bad:
                 st.error(t("This photo could not be read. Please choose a JPG or PNG image."))
             elif (photo is None and name == prof["name"] and father == prof["father_name"]
