@@ -682,14 +682,14 @@ NEW_HI = {
     "Full name": "पूरा नाम", "Father's name": "पिता का नाम", "Age": "उम्र",
     "Save and continue": "सेव करें और आगे बढ़ें",
     "Enter a valid name and father's name.": "सही नाम और पिता का नाम डालें।",
-    "Write names in": "नाम किस भाषा में लिखेंगे",
-    "English": "English", "Hindi": "हिन्दी",
-    "Write the name and father's name in English letters (A-Z) only.":
-        "नाम और पिता का नाम सिर्फ़ अंग्रेज़ी अक्षरों (A-Z) में लिखें।",
-    "Write the name and father's name in Hindi (Devanagari) letters only.":
-        "नाम और पिता का नाम सिर्फ़ हिन्दी (देवनागरी) अक्षरों में लिखें।",
-    "e.g. Ramesh Kumar": "जैसे: Ramesh Kumar",
-    "e.g. रमेश कुमार": "जैसे: रमेश कुमार",
+    "Full name (English)": "पूरा नाम (अंग्रेज़ी में)",
+    "Full name (Hindi)": "पूरा नाम (हिन्दी में)",
+    "Father's name (English)": "पिता का नाम (अंग्रेज़ी में)",
+    "Father's name (Hindi)": "पिता का नाम (हिन्दी में)",
+    "Write the name and father's name in both English and Hindi.":
+        "नाम और पिता का नाम अंग्रेज़ी और हिन्दी, दोनों में लिखें।",
+    "Use English letters (A-Z) in the English boxes and Hindi (Devanagari) letters in the Hindi boxes.":
+        "अंग्रेज़ी वाले खाने में अंग्रेज़ी अक्षर (A-Z) और हिन्दी वाले खाने में हिन्दी (देवनागरी) अक्षर लिखें।",
     "Username: {p}": "यूज़र नाम: {p}",
     "Create password": "पासवर्ड बनाएँ", "Confirm password": "पासवर्ड दोबारा डालें",
     "At least 6 characters.": "कम से कम 6 अक्षर।",
@@ -1453,6 +1453,11 @@ def init_users_db():
                 ALTER TABLE users_new RENAME TO users;
                 """
             )
+        for tbl in ("users", "profile_requests"):  # naam Hindi me bhi: name_hi, father_name_hi
+            have = [r[1] for r in c.execute(f"PRAGMA table_info({tbl})")]
+            for col in ("name_hi", "father_name_hi"):
+                if col not in have:
+                    c.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} TEXT DEFAULT ''")
         c.commit()
 
 
@@ -1505,17 +1510,30 @@ def name_ok_in(s, nl):
     return bool(re.search(r"[A-Za-z]", s)) and not has_devanagari(s)
 
 
-def name_lang_picker(key, *texts):
-    """English / Hindi choice for the name fields (kept outside st.form so the hint updates at once)."""
-    default = "hi" if any(has_devanagari(x) for x in texts) or (lang() == "hi" and not any(texts)) else "en"
-    return st.radio(
-        t("Write names in"), ["en", "hi"], index=["en", "hi"].index(default), horizontal=True,
-        format_func=lambda c: "English" if c == "en" else "हिन्दी", key=key,
-    )
+def pick_name(en, hi):
+    """Name in the app's current language; falls back to the other one if it is empty."""
+    en, hi = (en or "").strip(), (hi or "").strip()
+    first, second = (hi, en) if lang() == "hi" else (en, hi)
+    return first or second
 
 
-def name_hint(nl):
-    return t("e.g. रमेश कुमार") if nl == "hi" else t("e.g. Ramesh Kumar")
+def dn(row, key="name"):
+    """pick_name for a row/dict that has `key` (English) and `key_hi` (Hindi)."""
+    ks = row.keys()
+    return pick_name(row[key] if key in ks else "", row[key + "_hi"] if key + "_hi" in ks else "")
+
+
+def split_old_name(en, hi):
+    """Old accounts may have a Hindi name saved in the English box; move it to the Hindi box."""
+    en, hi = en or "", hi or ""
+    if has_devanagari(en) and not hi:
+        return "", en
+    return en, hi
+
+
+def names_valid(name, name_hi, father, father_hi):
+    return (name_ok_in(name, "en") and name_ok_in(father, "en")
+            and name_ok_in(name_hi, "hi") and name_ok_in(father_hi, "hi"))
 
 
 # ---- photo
@@ -1580,15 +1598,15 @@ def set_user_status(uid, status):
         c.commit()
 
 
-def create_user(phone, name, father, age, password, photo=None, status="pending"):
+def create_user(phone, name, father, age, password, photo=None, status="pending", name_hi="", father_hi=""):
     """Naya account 'pending' banta hai. Admin approve kare tabhi login chalega."""
     salt, h = hash_pw(password)
     with closing(users_conn()) as c:
         try:
             cur = c.execute(
-                "INSERT INTO users(phone, name, father_name, age, pw_salt, pw_hash, created_at, status, photo) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (phone, name, father, int(age), salt, h, date.today().isoformat(), status, photo),
+                "INSERT INTO users(phone, name, father_name, name_hi, father_name_hi, age, pw_salt, pw_hash, created_at, status, photo) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (phone, name, father, name_hi, father_hi, int(age), salt, h, date.today().isoformat(), status, photo),
             )
             c.commit()
         except sqlite3.IntegrityError:
@@ -1742,33 +1760,37 @@ def register_ui():
 
     elif step == 2:
         st.info(tf("Username: {p}", p=reg["phone"]))
-        nl = name_lang_picker("reg_name_lang")
         with st.form("reg_profile"):
-            name = st.text_input(t("Full name"), placeholder=name_hint(nl))
-            father = st.text_input(t("Father's name"), placeholder=name_hint(nl))
+            n1, n2 = st.columns(2)
+            name = n1.text_input(t("Full name (English)"), placeholder="Ramesh Kumar")
+            name_hi = n2.text_input(t("Full name (Hindi)"), placeholder="रमेश कुमार")
+            f1, f2 = st.columns(2)
+            father = f1.text_input(t("Father's name (English)"), placeholder="Mohan Lal")
+            father_hi = f2.text_input(t("Father's name (Hindi)"), placeholder="मोहन लाल")
             age = st.number_input(t("Age"), min_value=18, max_value=100, value=18, step=1)
             pic = st.file_uploader(t("Your photo"), type=["jpg", "jpeg", "png"],
                                    help=t("Take a clear photo of your face, or choose one from the gallery."))
             ok = st.form_submit_button(t("Save and continue"), use_container_width=True, type="primary")
         if ok:
             name, father = clean_name(name), clean_name(father)
+            name_hi, father_hi = clean_name(name_hi), clean_name(father_hi)
             photo = None
             if pic is not None:
                 try:
                     photo = process_photo(pic.getvalue())
                 except ValueError:
                     photo = None
-            if not valid_name(name) or not valid_name(father):
-                st.error(t("Enter a valid name and father's name."))
-            elif not (name_ok_in(name, nl) and name_ok_in(father, nl)):
-                st.error(t("Write the name and father's name in Hindi (Devanagari) letters only.") if nl == "hi"
-                         else t("Write the name and father's name in English letters (A-Z) only."))
+            if not all(valid_name(x) for x in (name, name_hi, father, father_hi)):
+                st.error(t("Write the name and father's name in both English and Hindi."))
+            elif not names_valid(name, name_hi, father, father_hi):
+                st.error(t("Use English letters (A-Z) in the English boxes and Hindi (Devanagari) letters in the Hindi boxes."))
             elif pic is None:
                 st.error(t("Please add your photo."))
             elif photo is None:
                 st.error(t("This photo could not be read. Please choose a JPG or PNG image."))
             else:
-                reg.update(profile={"name": name, "father": father, "age": int(age), "photo": photo}, step=3)
+                reg.update(profile={"name": name, "name_hi": name_hi, "father": father, "father_hi": father_hi,
+                                    "age": int(age), "photo": photo}, step=3)
                 st.rerun()
 
     else:
@@ -1777,8 +1799,8 @@ def register_ui():
             _reg_reset()
             st.rerun()
         c1, c2 = st.columns([1, 4])
-        c1.markdown(photo_html(p["photo"], 72, p["name"]), unsafe_allow_html=True)
-        c2.markdown(f"**{escape(p['name'])}**  \n{escape(reg['phone'])}")
+        c1.markdown(photo_html(p["photo"], 72, pick_name(p["name"], p["name_hi"])), unsafe_allow_html=True)
+        c2.markdown(f"**{escape(pick_name(p['name'], p['name_hi']))}**  \n{escape(reg['phone'])}")
         with st.form("reg_password"):
             pw = st.text_input(t("Create password"), type="password", help=t("At least 6 characters."))
             pw2 = st.text_input(t("Confirm password"), type="password")
@@ -1789,7 +1811,8 @@ def register_ui():
             elif pw != pw2:
                 st.error(t("Both passwords must be the same."))
             else:
-                row = create_user(reg["phone"], p["name"], p["father"], p["age"], pw, photo=p["photo"])
+                row = create_user(reg["phone"], p["name"], p["father"], p["age"], pw, photo=p["photo"],
+                                  name_hi=p["name_hi"], father_hi=p["father_hi"])
                 if row is None:
                     st.error(t("This number is already registered. Please log in."))
                 else:
@@ -1878,7 +1901,7 @@ def auth_gate():
 def user_profile(uid):
     with closing(users_conn()) as c:
         return c.execute(
-            "SELECT id, phone, name, father_name, age, photo FROM users WHERE id = ?", (int(uid),)
+            "SELECT id, phone, name, father_name, name_hi, father_name_hi, age, photo FROM users WHERE id = ?", (int(uid),)
         ).fetchone()
 
 
@@ -1887,15 +1910,16 @@ def get_profile_request(uid):
         return c.execute("SELECT * FROM profile_requests WHERE user_id = ?", (int(uid),)).fetchone()
 
 
-def save_profile_request(uid, name, father, age, photo):
+def save_profile_request(uid, name, father, age, photo, name_hi="", father_hi=""):
     """Naya request pehle wale ko replace karta hai. photo None ho to purani photo hi rahegi."""
     with closing(users_conn()) as c:
         c.execute(
-            "INSERT INTO profile_requests(user_id, name, father_name, age, photo, requested_at) "
-            "VALUES (?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET name = excluded.name, "
-            "father_name = excluded.father_name, age = excluded.age, photo = excluded.photo, "
+            "INSERT INTO profile_requests(user_id, name, father_name, name_hi, father_name_hi, age, photo, requested_at) "
+            "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET name = excluded.name, "
+            "father_name = excluded.father_name, name_hi = excluded.name_hi, "
+            "father_name_hi = excluded.father_name_hi, age = excluded.age, photo = excluded.photo, "
             "requested_at = excluded.requested_at",
-            (int(uid), name, father, int(age), photo, date.today().isoformat()),
+            (int(uid), name, father, name_hi, father_hi, int(age), photo, date.today().isoformat()),
         )
         c.commit()
 
@@ -1913,11 +1937,13 @@ def apply_profile_request(uid):
         return
     with closing(users_conn()) as c:
         if req["photo"] is not None:
-            c.execute("UPDATE users SET name=?, father_name=?, age=?, photo=? WHERE id=?",
-                      (req["name"], req["father_name"], int(req["age"]), req["photo"], int(uid)))
+            c.execute("UPDATE users SET name=?, father_name=?, name_hi=?, father_name_hi=?, age=?, photo=? WHERE id=?",
+                      (req["name"], req["father_name"], req["name_hi"] or "", req["father_name_hi"] or "",
+                       int(req["age"]), req["photo"], int(uid)))
         else:
-            c.execute("UPDATE users SET name=?, father_name=?, age=? WHERE id=?",
-                      (req["name"], req["father_name"], int(req["age"]), int(uid)))
+            c.execute("UPDATE users SET name=?, father_name=?, name_hi=?, father_name_hi=?, age=? WHERE id=?",
+                      (req["name"], req["father_name"], req["name_hi"] or "", req["father_name_hi"] or "",
+                       int(req["age"]), int(uid)))
         c.execute("DELETE FROM profile_requests WHERE user_id = ?", (int(uid),))
         c.commit()
 
@@ -1925,7 +1951,7 @@ def apply_profile_request(uid):
 def account_bar():
     a = st.session_state["auth"]
     prof = user_profile(a["uid"])
-    shown_name = prof["name"] if prof else a["name"]  # admin ke approve karne ke baad naya naam dikhe
+    shown_name = dn(prof) if prof else a["name"]  # admin ke approve karne ke baad naya naam dikhe
     c1, c2 = st.columns([4, 1])
     c1.markdown(
         '<div style="display:flex;align-items:center;gap:12px;">'
@@ -1940,9 +1966,12 @@ def account_bar():
 # ---- admin console: sab users ka data
 def users_df():
     with closing(sqlite3.connect(USERS_DB)) as c:
-        return pd.read_sql_query(
-            "SELECT id, phone, name, father_name, age, status, created_at, last_login "
+        df = pd.read_sql_query(
+            "SELECT id, phone, name, father_name, name_hi, father_name_hi, age, status, created_at, last_login "
             "FROM users ORDER BY id DESC", c)
+    df["name"] = [pick_name(a, b) for a, b in zip(df["name"], df["name_hi"])]
+    df["father_name"] = [pick_name(a, b) for a, b in zip(df["father_name"], df["father_name_hi"])]
+    return df.drop(columns=["name_hi", "father_name_hi"])
 
 
 def count_entries(path):
@@ -2002,7 +2031,7 @@ def admin_pending_section():
     """Naye account ki requests: photo aur details dekhkar Approve / Reject."""
     with closing(users_conn()) as c:
         rows = c.execute(
-            "SELECT id, phone, name, father_name, age, created_at, photo FROM users "
+            "SELECT id, phone, name, father_name, name_hi, father_name_hi, age, created_at, photo FROM users "
             "WHERE status = 'pending' ORDER BY id"
         ).fetchall()
     st.markdown(t("#### 🕒 Pending requests") + f" ({len(rows)})")
@@ -2014,10 +2043,10 @@ def admin_pending_section():
     for r in rows:
         with st.container(border=True):
             c1, c2 = st.columns([1, 3])
-            c1.markdown(photo_html(r["photo"], 96, r["name"]), unsafe_allow_html=True)
+            c1.markdown(photo_html(r["photo"], 96, dn(r)), unsafe_allow_html=True)
             c2.markdown(
-                f"**{escape(r['name'])}**  \n"
-                f"{father_label}: {escape(r['father_name'])}  \n"
+                f"**{escape(dn(r))}**  \n"
+                f"{father_label}: {escape(dn(r, 'father_name'))}  \n"
                 f"{t('Age')}: {r['age']} · 📱 {escape(r['phone'])} · {r['created_at']}"
             )
             b1, b2 = st.columns(2)
@@ -2035,8 +2064,9 @@ def admin_profile_requests_section():
     """Users ke profile badlav (naam, pita ka naam, umar, photo): admin verify kare tabhi lagu hote hain."""
     with closing(users_conn()) as c:
         rows = c.execute(
-            "SELECT r.user_id, r.name, r.father_name, r.age, r.photo, r.requested_at, "
-            "u.phone, u.name AS old_name, u.father_name AS old_father, u.age AS old_age, u.photo AS old_photo "
+            "SELECT r.user_id, r.name, r.father_name, r.name_hi, r.father_name_hi, r.age, r.photo, r.requested_at, "
+            "u.phone, u.name AS old_name, u.father_name AS old_father, u.name_hi AS old_name_hi, "
+            "u.father_name_hi AS old_father_hi, u.age AS old_age, u.photo AS old_photo "
             "FROM profile_requests r JOIN users u ON u.id = r.user_id ORDER BY r.requested_at, r.user_id"
         ).fetchall()
     st.markdown(t("#### ✏️ Profile update requests") + f" ({len(rows)})")
@@ -2051,12 +2081,13 @@ def admin_profile_requests_section():
             st.markdown(f"📱 **{escape(r['phone'])}** · {r['requested_at']}")
             o, n = st.columns(2)
             o.markdown(f"**{t('Old')}**")
-            o.markdown(photo_html(r["old_photo"], 72, r["old_name"]), unsafe_allow_html=True)
-            o.markdown(f"{escape(r['old_name'])}  \n{father_label}: {escape(r['old_father'])}  \n{t('Age')}: {r['old_age']}")
+            old_n, old_f = pick_name(r["old_name"], r["old_name_hi"]), pick_name(r["old_father"], r["old_father_hi"])
+            o.markdown(photo_html(r["old_photo"], 72, old_n), unsafe_allow_html=True)
+            o.markdown(f"{escape(old_n)}  \n{father_label}: {escape(old_f)}  \n{t('Age')}: {r['old_age']}")
             n.markdown(f"**{t('New')}**")
-            n.markdown(photo_html(r["photo"] if r["photo"] is not None else r["old_photo"], 72, r["name"]),
+            n.markdown(photo_html(r["photo"] if r["photo"] is not None else r["old_photo"], 72, dn(r)),
                        unsafe_allow_html=True)
-            n.markdown(f"{escape(r['name'])}  \n{father_label}: {escape(r['father_name'])}  \n{t('Age')}: {r['age']}")
+            n.markdown(f"{escape(dn(r))}  \n{father_label}: {escape(dn(r, 'father_name'))}  \n{t('Age')}: {r['age']}")
             b1, b2 = st.columns(2)
             if b1.button("✅ " + t("Approve"), key=f"pr_ap_{uid}", type="primary", use_container_width=True):
                 apply_profile_request(uid)
@@ -4519,9 +4550,9 @@ def profile_section():
     st.markdown("#### 👤 " + t("Your current details"))
     fl = t("Father's name")
     c1, c2 = st.columns([1, 4])
-    c1.markdown(photo_html(prof["photo"], 72, prof["name"]), unsafe_allow_html=True)
+    c1.markdown(photo_html(prof["photo"], 72, dn(prof)), unsafe_allow_html=True)
     c2.markdown(
-        f"**{escape(prof['name'])}**  \n{fl}: {escape(prof['father_name'])}  \n"
+        f"**{escape(dn(prof))}**  \n{fl}: {escape(dn(prof, 'father_name'))}  \n"
         f"{t('Age')}: {prof['age']} · 📱 {escape(prof['phone'])}"
     )
 
@@ -4532,9 +4563,9 @@ def profile_section():
             st.markdown("🕒 **" + t("Waiting for admin approval") + "**")
             st.caption(t("Requested details"))
             r1, r2 = st.columns([1, 4])
-            r1.markdown(photo_html(req["photo"] if req["photo"] is not None else prof["photo"], 56, req["name"]),
+            r1.markdown(photo_html(req["photo"] if req["photo"] is not None else prof["photo"], 56, dn(req)),
                         unsafe_allow_html=True)
-            r2.markdown(f"**{escape(req['name'])}**  \n{fl}: {escape(req['father_name'])}  \n"
+            r2.markdown(f"**{escape(dn(req))}**  \n{fl}: {escape(dn(req, 'father_name'))}  \n"
                         f"{t('Age')}: {req['age']}")
             if st.button(t("Cancel request"), key="pr_cancel"):
                 delete_profile_request(uid)
@@ -4579,15 +4610,21 @@ def profile_section():
         st.markdown(t("#### 👤 Update profile details"))
         st.info(t("Name, father's name, age and photo changes are applied only after the admin verifies them. Until then your old details stay."))
         base = req if req is not None else prof
-        nl = name_lang_picker("prof_name_lang", base["name"], base["father_name"])
+        v_name, v_name_hi = split_old_name(base["name"], base["name_hi"])
+        v_father, v_father_hi = split_old_name(base["father_name"], base["father_name_hi"])
         with st.form("profile_update_form"):
-            name = st.text_input(t("Full name"), value=base["name"], placeholder=name_hint(nl))
-            father = st.text_input(t("Father's name"), value=base["father_name"], placeholder=name_hint(nl))
+            n1, n2 = st.columns(2)
+            name = n1.text_input(t("Full name (English)"), value=v_name, placeholder="Ramesh Kumar")
+            name_hi = n2.text_input(t("Full name (Hindi)"), value=v_name_hi, placeholder="रमेश कुमार")
+            f1, f2 = st.columns(2)
+            father = f1.text_input(t("Father's name (English)"), value=v_father, placeholder="Mohan Lal")
+            father_hi = f2.text_input(t("Father's name (Hindi)"), value=v_father_hi, placeholder="मोहन लाल")
             age = st.number_input(t("Age"), min_value=18, max_value=100, value=min(max(int(base["age"]), 18), 100), step=1)
             pic = st.file_uploader(t("Your photo (leave empty to keep the current one)"), type=["jpg", "jpeg", "png"])
             ok = st.form_submit_button(t("Send for verification"), type="primary", use_container_width=True)
         if ok:
             name, father = clean_name(name), clean_name(father)
+            name_hi, father_hi = clean_name(name_hi), clean_name(father_hi)
             photo = None
             photo_bad = False
             if pic is not None:
@@ -4595,20 +4632,20 @@ def profile_section():
                     photo = process_photo(pic.getvalue())
                 except ValueError:
                     photo_bad = True
-            if not valid_name(name) or not valid_name(father):
-                st.error(t("Enter a valid name and father's name."))
-            elif not (name_ok_in(name, nl) and name_ok_in(father, nl)):
-                st.error(t("Write the name and father's name in Hindi (Devanagari) letters only.") if nl == "hi"
-                         else t("Write the name and father's name in English letters (A-Z) only."))
+            if not all(valid_name(x) for x in (name, name_hi, father, father_hi)):
+                st.error(t("Write the name and father's name in both English and Hindi."))
+            elif not names_valid(name, name_hi, father, father_hi):
+                st.error(t("Use English letters (A-Z) in the English boxes and Hindi (Devanagari) letters in the Hindi boxes."))
             elif photo_bad:
                 st.error(t("This photo could not be read. Please choose a JPG or PNG image."))
             elif (photo is None and name == prof["name"] and father == prof["father_name"]
+                  and name_hi == (prof["name_hi"] or "") and father_hi == (prof["father_name_hi"] or "")
                   and int(age) == int(prof["age"])):
                 st.info(t("No change found. Edit a detail first."))
             else:
                 if photo is None and req is not None:
                     photo = req["photo"]  # pehle bheji hui nayi photo na hat jaye
-                save_profile_request(uid, name, father, int(age), photo)
+                save_profile_request(uid, name, father, int(age), photo, name_hi=name_hi, father_hi=father_hi)
                 st.session_state["profile_flash"] = "Your update request has been sent to the admin. Until it is approved, your old details stay."
                 st.session_state["profile_open"] = None
                 st.rerun()
