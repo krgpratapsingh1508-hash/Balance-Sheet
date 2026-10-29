@@ -716,6 +716,9 @@ NEW_HI = {
     "#### All users": "#### सभी यूज़र", "No users yet.": "अभी कोई यूज़र नहीं है।",
     "ID": "आईडी", "Mobile": "मोबाइल", "Joined": "जुड़ने की तारीख",
     "Last login": "आखिरी लॉगिन", "Entries": "एंट्री",
+    "Search by name or mobile": "नाम या मोबाइल से खोजें",
+    "Showing {n} of {m} users": "{m} में से {n} यूज़र दिख रहे हैं",
+    "No users match your search.": "आपकी खोज से कोई यूज़र नहीं मिला।",
     "#### Manage a user": "#### यूज़र संभालें", "Select user": "यूज़र चुनें",
     "Open this user's ledger": "इस यूज़र की खाता-बही खोलें",
     "Reset this user's password": "इस यूज़र का पासवर्ड रीसेट करें",
@@ -861,6 +864,25 @@ h1, h2, h3, h4 {
 .kpi.g { border-top-color: #1e7a4f; } .kpi.g .val { color: #1e7a4f; }
 .kpi.r { border-top-color: #b4372f; } .kpi.r .val { color: #b4372f; }
 .kpi.b { border-top-color: #0f3d4c; } .kpi.b .val { color: #0f3d4c; }
+
+/* Admin: user cards */
+.ucount { color:#5b6975; font-size:.9rem; margin:2px 0 12px; }
+.ugrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(310px,1fr)); gap:16px; margin-bottom:18px; }
+.ucard { position:relative; background:#fff; border:1px solid #d6e0e6; border-radius:12px; padding:16px 16px 12px;
+    box-shadow:0 2px 10px rgba(15,61,76,.07); border-top:4px solid #5b6975; transition:transform .15s, box-shadow .15s; }
+.ucard:hover { transform:translateY(-2px); box-shadow:0 10px 22px rgba(15,61,76,.15); }
+.ucard.ok { border-top-color:#1e7a4f; } .ucard.wait { border-top-color:#c58a00; } .ucard.no { border-top-color:#b4372f; }
+.utop { display:flex; align-items:center; gap:14px; }
+.utop .uname { font-weight:700; font-size:1.08rem; color:#0f3d4c; line-height:1.25; word-break:break-word; }
+.utop .ufa { font-size:.86rem; color:#6b7885; margin-top:2px; }
+.unum { position:absolute; top:10px; right:12px; font-size:.78rem; font-weight:600; color:#8a96a1; }
+.ustat { display:inline-block; margin-top:6px; padding:2px 11px; border-radius:999px; font-size:.78rem; font-weight:600; }
+.ustat.ok { background:#e3f1ea; color:#1e7a4f; } .ustat.wait { background:#fdf1d6; color:#8a6100; } .ustat.no { background:#f6e4e2; color:#b4372f; }
+.ubody { display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; margin-top:14px; padding-top:12px; border-top:1px dashed #d6e0e6; }
+.ubody .it { font-size:.9rem; color:#14202b; min-width:0; word-break:break-word; }
+.ubody .it.full { grid-column:1 / -1; }
+.ubody .it small { display:block; font-size:.72rem; color:#6b7885; font-weight:500; letter-spacing:.02em; margin-bottom:1px; }
+.uent { display:inline-block; background:#eaf2f5; color:#0f3d4c; border-radius:8px; padding:1px 10px; font-weight:700; }
 
 /* Party and loan cards */
 .pcard-top { display: flex; align-items: center; gap: 12px; }
@@ -2027,6 +2049,55 @@ def restore_all_data(raw):
     return n
 
 
+def admin_user_cards(df):
+    """Saare users ko sundar cards me dikhata hai: photo, naam, pita ka naam, umar, mobile, status, join, last login, entries."""
+    cls = {"approved": "ok", "pending": "wait", "rejected": "no"}
+    icon = {"approved": "✅", "pending": "🕒", "rejected": "⛔"}
+    rows = []
+    for n, r in enumerate(df.sort_values("id").itertuples(), start=1):  # purana user pehle
+        stt = r.status or "approved"
+        rows.append({
+            "n": n, "uid": int(r.id), "name": r.name or "", "father": r.father_name or "", "age": r.age,
+            "phone": r.phone or "", "status": stt, "joined": r.created_at or "—",
+            "last": r.last_login or "—", "entries": count_entries(user_db_path(int(r.id))),
+        })
+
+    f1, f2 = st.columns([3, 2])
+    q = f1.text_input(t("Search by name or mobile"), key="adm_q", placeholder="🔍").strip().lower()
+    opts = ["all", "approved", "pending", "rejected"]
+    pick = f2.selectbox(t("Status"), opts, key="adm_status_filter",
+                        format_func=lambda o: t("All") if o == "all" else t(o))
+    shown = [x for x in rows
+             if (pick == "all" or x["status"] == pick)
+             and (not q or q in x["name"].lower() or q in x["father"].lower() or q in x["phone"])]
+    st.markdown(f'<div class="ucount">{escape(tf("Showing {n} of {m} users", n=len(shown), m=len(rows)))}</div>',
+                unsafe_allow_html=True)
+    if not shown:
+        st.caption(t("No users match your search."))
+        return
+
+    lbl = {k: escape(t(k)) for k in ("Mobile", "Age", "Joined", "Last login", "Entries")}
+    father_lbl = escape(t("Father's name"))
+    cards = []
+    for x in shown:
+        c = cls.get(x["status"], "ok")
+        photo = photo_html(user_photo(x["uid"]), 64, x["name"])
+        cards.append(
+            f'<div class="ucard {c}"><span class="unum">#{x["n"]}</span>'
+            f'<div class="utop">{photo}<div><div class="uname">{escape(x["name"])}</div>'
+            f'<div class="ufa">{father_lbl}: {escape(x["father"] or "—")}</div>'
+            f'<span class="ustat {c}">{icon.get(x["status"], "")} {escape(t(x["status"]))}</span></div></div>'
+            f'<div class="ubody">'
+            f'<div class="it full"><small>📱 {lbl["Mobile"]}</small>{escape(x["phone"])}</div>'
+            f'<div class="it"><small>🎂 {lbl["Age"]}</small>{escape(str(x["age"]))}</div>'
+            f'<div class="it"><small>🧾 {lbl["Entries"]}</small><span class="uent">{x["entries"]}</span></div>'
+            f'<div class="it"><small>📅 {lbl["Joined"]}</small>{escape(str(x["joined"]))}</div>'
+            f'<div class="it"><small>🕐 {lbl["Last login"]}</small>{escape(str(x["last"]))}</div>'
+            f'</div></div>'
+        )
+    st.markdown('<div class="ugrid">' + "".join(cards) + '</div>', unsafe_allow_html=True)
+
+
 def admin_pending_section():
     """Naye account ki requests: photo aur details dekhkar Approve / Reject."""
     with closing(users_conn()) as c:
@@ -2140,20 +2211,7 @@ def admin_console():
     if df.empty:
         st.caption(t("No users yet."))
     else:
-        view = df.sort_values("id").reset_index(drop=True)  # purana user upar
-        view["entries"] = [count_entries(user_db_path(i)) for i in view["id"]]
-        photos = []
-        for i in view["id"]:
-            ph = user_photo(i)
-            photos.append("data:image/jpeg;base64," + base64.b64encode(bytes(ph)).decode() if ph else None)
-        view.insert(1, "photo", photos)
-        view["id"] = range(1, len(view) + 1)  # dikhane ke liye 1 se serial number (asli id andar alag rehti hai)
-        view = view.rename(columns={
-            "id": "ID", "photo": "Photo", "phone": "Mobile", "name": "Name", "father_name": "Father's name", "age": "Age",
-            "status": "Status", "created_at": "Joined", "last_login": "Last login", "entries": "Entries",
-        })
-        show_df(view, hide_index=True, use_container_width=True,
-                column_config={"Photo": st.column_config.ImageColumn("Photo", width="small")})
+        admin_user_cards(df)
 
         st.markdown(t("#### Manage a user"))
         ids = [int(i) for i in df["id"]]
