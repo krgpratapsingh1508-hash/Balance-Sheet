@@ -716,6 +716,16 @@ NEW_HI = {
     "#### All users": "#### सभी यूज़र", "No users yet.": "अभी कोई यूज़र नहीं है।",
     "ID": "आईडी", "Mobile": "मोबाइल", "Joined": "जुड़ने की तारीख",
     "Last login": "आखिरी लॉगिन", "Entries": "एंट्री",
+    "Search": "खोजें",
+    "Show more": "और दिखाएँ",
+    "No matching entries.": "कोई मिलती-जुलती एंट्री नहीं मिली।",
+    "Showing {n} of {m}": "{m} में से {n} दिख रहे हैं",
+    "Paid": "भरा हुआ",
+    "Paid late": "देर से भरा",
+    "Overdue": "बकाया (देर)",
+    "Upcoming": "आने वाली",
+    "Not paid yet": "अभी नहीं भरा",
+    "{n} days late": "{n} दिन देर",
     "Search by name or mobile": "नाम या मोबाइल से खोजें",
     "Showing {n} of {m} users": "{m} में से {n} यूज़र दिख रहे हैं",
     "No users match your search.": "आपकी खोज से कोई यूज़र नहीं मिला।",
@@ -883,6 +893,26 @@ h1, h2, h3, h4 {
 .ubody .it.full { grid-column:1 / -1; }
 .ubody .it small { display:block; font-size:.72rem; color:#6b7885; font-weight:500; letter-spacing:.02em; margin-bottom:1px; }
 .uent { display:inline-block; background:#eaf2f5; color:#0f3d4c; border-radius:8px; padding:1px 10px; font-weight:700; }
+
+/* User side: modern lists */
+.lst { background:#fff; border:1px solid #d6e0e6; border-radius:14px; overflow:hidden; box-shadow:0 2px 10px rgba(15,61,76,.06); margin:6px 0 10px; }
+.li { display:flex; align-items:center; gap:12px; padding:12px 14px; border-bottom:1px solid #eef2f5; transition:background .12s; }
+.li:last-child { border-bottom:none; }
+.li:hover { background:#f4f9fb; }
+.li .ico { width:42px; height:42px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; flex:none; background:#e7ebee; }
+.li .ico.g { background:#e3f1ea; } .li .ico.r { background:#f6e4e2; } .li .ico.b { background:#e3eef3; } .li .ico.y { background:#fdf1d6; } .li .ico.z { background:#e7ebee; }
+.li .mid { flex:1; min-width:0; }
+.li .ttl { font-weight:600; font-size:.98rem; color:#14202b; line-height:1.3; word-break:break-word; }
+.li .sub { font-size:.78rem; color:#6b7885; margin-top:2px; line-height:1.4; word-break:break-word; }
+.li .rt { text-align:right; flex:none; max-width:46%; }
+.li .amt { font-family:'Source Serif 4',Georgia,serif; font-weight:700; font-size:1.05rem; font-variant-numeric:tabular-nums; white-space:nowrap; color:#14202b; }
+.li .amt.pos { color:#1e7a4f; } .li .amt.neg { color:#b4372f; }
+.li .chip { display:inline-block; margin-top:3px; padding:1px 9px; border-radius:999px; font-size:.72rem; font-weight:600; }
+.chip.y { background:#fdf1d6; color:#8a6100; }
+.li .bar { height:5px; border-radius:99px; background:#e7ebee; margin-top:7px; overflow:hidden; }
+.li .bar > i { display:block; height:100%; border-radius:99px; background:#2a8196; }
+.lst-more { text-align:center; color:#6b7885; font-size:.82rem; margin:2px 0 6px; }
+@media (max-width:640px) { .li { padding:10px 10px; gap:10px; } .li .ico { width:36px; height:36px; font-size:1.05rem; } .li .rt { max-width:50%; } }
 
 /* Party and loan cards */
 .pcard-top { display: flex; align-items: center; gap: 12px; }
@@ -2527,6 +2557,58 @@ def followup_section():
         st.write("")
 
 
+CAT_ICONS = {
+    "Ghar / Ration": "🏠", "Khana-Peena": "🍽️", "Petrol / Travel": "⛽", "Bijli / Pani / Bill": "💡",
+    "Dawai / Ilaaj": "💊", "Shopping": "🛍️", "Padhai / Fees": "🎓", "Dukaan / Business": "🏪",
+    "Shaadi / Function": "🎉", "Cash": "💵", "Other": "🧾",
+}
+KIND_ICONS = {"Money lent": "📤", "Repayment received": "📥", "Money borrowed": "🤝", "Repayment made": "💸"}
+
+
+def list_html(items):
+    """Sundar list: har item = icon, title, sub, amount, chip, (optional) progress bar."""
+    rows = []
+    for it in items:
+        bar = ""
+        if it.get("bar") is not None:
+            bar = f'<div class="bar"><i style="width:{min(max(it["bar"], 0.0), 1.0) * 100:.1f}%"></i></div>'
+        chip = (f'<div><span class="chip {it.get("chip_cls", "z")}">{escape(str(it["chip"]))}</span></div>'
+                if it.get("chip") else "")
+        amt = (f'<div class="amt {it.get("amt_cls", "")}">{escape(str(it["amt"]))}</div>'
+               if it.get("amt") not in (None, "") else "")
+        sub = f'<div class="sub">{escape(str(it["sub"]))}</div>' if it.get("sub") else ""
+        rows.append(
+            f'<div class="li"><div class="ico {it.get("tone", "z")}">{it.get("icon", "•")}</div>'
+            f'<div class="mid"><div class="ttl">{escape(str(it["title"]))}</div>{sub}{bar}</div>'
+            f'<div class="rt">{amt}{chip}</div></div>'
+        )
+    return '<div class="lst">' + "".join(rows) + "</div>"
+
+
+def show_list(key, items, step=12, search=False):
+    """List dikhata hai: search box (optional) aur 'Show more' button ke saath."""
+    if not items:
+        return
+    if search:
+        q = st.text_input(t("Search"), key=f"{key}_q", placeholder="🔍").strip().lower()
+        if q:
+            items = [i for i in items if q in str(i.get("q", i["title"])).lower() or q in str(i.get("sub", "")).lower()]
+    nk = f"{key}_n"
+    n = st.session_state.get(nk, step)
+    if not items:
+        st.caption(t("No matching entries."))
+        return
+    st.markdown(list_html(items[:n]), unsafe_allow_html=True)
+    if len(items) > n:
+        st.markdown(f'<div class="lst-more">{escape(tf("Showing {n} of {m}", n=n, m=len(items)))}</div>',
+                    unsafe_allow_html=True)
+        st.button(t("Show more"), key=f"{key}_more", use_container_width=True,
+                  on_click=lambda: st.session_state.__setitem__(nk, n + step))
+    elif search or len(items) > step:
+        st.markdown(f'<div class="lst-more">{escape(tf("Showing {n} of {m}", n=len(items), m=len(items)))}</div>',
+                    unsafe_allow_html=True)
+
+
 def return_dates_section():
     """List of every unpaid entry with its return date, so it is clear what the alerts are based on."""
     s = summary_df()
@@ -2542,25 +2624,32 @@ def return_dates_section():
         for e in open_entries(df[df["party_id"] == int(r.id)], sign):
             due = e["own_due"]
             if due is None:
-                status = t("No return date")
+                status, scls = t("No return date"), "z"
             elif due < today:
-                status = tf("{n} days overdue", n=(today - due).days)
+                status, scls = tf("{n} days overdue", n=(today - due).days), "r"
             elif due == today:
-                status = t("Due today")
+                status, scls = t("Due today"), "y"
             else:
-                status = tf("In {n} days", n=(due - today).days)
+                status, scls = tf("In {n} days", n=(due - today).days), "g"
             rows.append({
                 "sort": due or date.max, "Party": r.name, "Type": "Receivable" if sign > 0 else "Payable",
                 "Amount": e["rem"], "Entry date": e["date"].isoformat() if e["date"] else "",
-                "Return date": due.isoformat() if due else "—", "Status": status,
+                "Return date": due.isoformat() if due else "—", "Status": status, "cls": scls,
             })
     if not rows:
         return
     rows.sort(key=lambda x: x["sort"])
-    tbl = pd.DataFrame(rows).drop(columns=["sort"])
+    items = []
+    for x in rows:
+        recv = x["Type"] == "Receivable"
+        items.append({
+            "icon": "📤" if recv else "📥", "tone": "g" if recv else "r", "title": x["Party"],
+            "sub": f'{t(x["Type"])} · {t("Entry date")}: {x["Entry date"] or "—"} · {t("Return date")}: {x["Return date"]}',
+            "amt": inr(x["Amount"]), "amt_cls": "pos" if recv else "neg",
+            "chip": x["Status"], "chip_cls": x["cls"], "q": x["Party"],
+        })
     with st.expander("📅 " + t("Return dates of unpaid entries")):
-        show_df(tbl, hide_index=True, use_container_width=True,
-                column_config={"Amount": st.column_config.NumberColumn(format="₹%.2f")})
+        show_list("ret_dates", items, step=8, search=len(items) > 8)
 
 
 # ---------------------------------------------------------------- pages
@@ -2713,9 +2802,13 @@ def period_cash_section():
             tbl = pd.DataFrame({"Came in": v["Aaya"], "Went out": v["Gaya"], "Left": v["Bacha"]})
             tbl.index = [_month_label(x) for x in tbl.index]
             tbl = tbl.iloc[::-1].reset_index().rename(columns={"index": "Month"})
-            money = st.column_config.NumberColumn(format="₹%.2f")
-            show_df(tbl, hide_index=True, use_container_width=True,
-                    column_config={c: money for c in ["Came in", "Went out", "Left"]})
+            items = [{
+                "icon": "🗓️", "tone": "g" if r_["Left"] >= 0 else "r", "title": r_["Month"],
+                "sub": f'{t("Came in")}: {inr(r_["Came in"])} · {t("Went out")}: {inr(r_["Went out"])}',
+                "amt": inr(r_["Left"]), "amt_cls": "pos" if r_["Left"] >= 0 else "neg",
+                "chip": t("Left"), "chip_cls": "g" if r_["Left"] >= 0 else "r",
+            } for _, r_ in tbl.iterrows()]
+            show_list("pc_months", items, step=12)
     st.write("")
 
 
@@ -2753,11 +2846,13 @@ def cash_section():
             "Net": cf["Bacha"],
             "Cumulative": cf["Bacha"].cumsum(),
         }).iloc[::-1].reset_index().rename(columns={"month": "Month"})
-        money = st.column_config.NumberColumn(format="₹%.2f")
-        show_df(
-            tbl, hide_index=True, use_container_width=True,
-            column_config={c: money for c in ["Income", "Other inflow", "Outflow", "Net", "Cumulative"]},
-        )
+        items = [{
+            "icon": "🗓️", "tone": "g" if r_["Net"] >= 0 else "r", "title": _month_label(r_["Month"]),
+            "sub": f'{t("Income")}: {inr(r_["Income"])} · {t("Other inflow")}: {inr(r_["Other inflow"])} · {t("Outflow")}: {inr(r_["Outflow"])}',
+            "amt": inr(r_["Net"]), "amt_cls": "pos" if r_["Net"] >= 0 else "neg",
+            "chip": f'{t("Cumulative")}: {inr(r_["Cumulative"])}', "chip_cls": "z",
+        } for _, r_ in tbl.iterrows()]
+        show_list("cf_months", items, step=12)
     st.write("")
 
 
@@ -2785,9 +2880,14 @@ def mode_section():
         st.caption(t("Entries saved before the payment mode was added show as Not specified. Edit them in the Admin panel."))
     with st.expander(t("Cash vs Online")):
         tbl = g.reset_index()[["Mode", "In", "Out", "Left"]]
-        money = st.column_config.NumberColumn(format="₹%.2f")
-        show_df(tbl, hide_index=True, use_container_width=True,
-                column_config={c: money for c in ["In", "Out", "Left"]})
+        items = [{
+            "icon": "💵" if r_["Mode"] == "Cash" else "📱" if r_["Mode"] == "Online" else "❔",
+            "tone": "g" if r_["Left"] >= 0 else "r", "title": t(r_["Mode"]),
+            "sub": f'{t("In")}: {inr(r_["In"])} · {t("Out")}: {inr(r_["Out"])}',
+            "amt": inr(r_["Left"]), "amt_cls": "pos" if r_["Left"] >= 0 else "neg",
+            "chip": t("Left"), "chip_cls": "g" if r_["Left"] >= 0 else "r",
+        } for _, r_ in tbl.iterrows()]
+        show_list("mode_list", items, step=6)
     st.write("")
 
 
@@ -2841,25 +2941,36 @@ def expense_section():
         st.altair_chart(chart, use_container_width=True)
     with r:
         st.markdown(t("**Category-wise**"))
-        show_df(
-            by_cat, hide_index=True, use_container_width=True,
-            column_config={"Total": st.column_config.NumberColumn(format="₹%.2f")},
-        )
+        items = [{
+            "icon": CAT_ICONS.get(r_["Category"], "🧾"), "tone": "r", "title": t(r_["Category"]),
+            "sub": f'{(r_["Total"] / total * 100 if total else 0):.1f}%',
+            "amt": inr(r_["Total"]), "amt_cls": "neg",
+            "bar": (r_["Total"] / total) if total else 0.0,
+        } for _, r_ in by_cat.iterrows()]
+        show_list(f"exp_cat_{pick}", items, step=8)
 
     with st.expander(t("Place-wise full list")):
-        show_df(
-            by_place[["Place", "Category", "Entries", "Total", "Share %", "Last"]],
-            hide_index=True, use_container_width=True,
-            column_config={"Total": st.column_config.NumberColumn(format="₹%.2f")},
-        )
+        items = [{
+            "icon": CAT_ICONS.get(r_["Category"], "🧾"), "tone": "r", "title": r_["Place"],
+            "sub": f'{t(r_["Category"])} · {tf("{n} entries", n=int(r_["Entries"]))} · {t("Last")}: {r_["Last"]}',
+            "amt": inr(r_["Total"]), "amt_cls": "neg", "chip": f'{r_["Share %"]}%', "chip_cls": "z",
+            "bar": r_["Total"] / total if total else 0.0,
+        } for _, r_ in by_place.iterrows()]
+        show_list(f"exp_place_{pick}", items, step=10, search=len(items) > 10)
     with st.expander(t("All expense entries")):
-        show_df(
-            v.sort_values(["date", "id"], ascending=False)[["date", "place", "category", "mode", "amount", "note"]]
-            .rename(columns={"date": "Date", "place": "Place", "category": "Category",
-                             "amount": "Amount", "note": "Note", "mode": "Mode"}),
-            hide_index=True, use_container_width=True,
-            column_config={"Amount": st.column_config.NumberColumn(format="₹%.2f")},
-        )
+        items = []
+        for _, r_ in v.sort_values(["date", "id"], ascending=False).iterrows():
+            bits = [t(r_["category"]), str(r_["date"])]
+            if r_["mode"]:
+                bits.append(t(r_["mode"]))
+            if r_["note"]:
+                bits.append(str(r_["note"]))
+            items.append({
+                "icon": CAT_ICONS.get(r_["category"], "🧾"), "tone": "r", "title": r_["place"] or t(r_["category"]),
+                "sub": " · ".join(bits), "amt": inr(r_["amount"]), "amt_cls": "neg",
+                "chip": t(r_["mode"]) if r_["mode"] else "", "chip_cls": "b" if r_["mode"] == "Online" else "g",
+            })
+        show_list(f"exp_all_{pick}", items, step=12, search=True)
     st.write("")
 
 
@@ -2943,20 +3054,26 @@ def loan_section():
         if is_open:
             with side, st.container(border=True):
                 st.markdown(f"**{escape(l['name'])}** · " + t("Instalment schedule"))
-                tbl = pd.DataFrame([
-                    {
-                        "No.": r["no"],
-                        "Due date": r["due"].isoformat(),
-                        "Paid on": r["paid_on"].isoformat() if r["paid_on"] else "—",
-                        "Days late": r["late"],
-                        "Penalty": r["penalty"],
-                    }
-                    for r in i["rows"]
-                ])
-                show_df(
-                    tbl, hide_index=True, use_container_width=True,
-                    column_config={"Penalty": st.column_config.NumberColumn(format="₹%.2f")},
-                )
+                sched = []
+                for r in i["rows"]:
+                    if r["paid_on"]:
+                        icon, tone = ("✅", "g") if not r["late"] else ("⏱️", "y")
+                        chip, ccls = (t("Paid") if not r["late"] else t("Paid late"), "g" if not r["late"] else "y")
+                        sub = f'{t("Due date")}: {r["due"].isoformat()} · {t("Paid on")}: {r["paid_on"].isoformat()}'
+                    elif r["due"] < today:
+                        icon, tone, chip, ccls = "⚠️", "r", t("Overdue"), "r"
+                        sub = f'{t("Due date")}: {r["due"].isoformat()} · {t("Not paid yet")}'
+                    else:
+                        icon, tone, chip, ccls = "⏳", "z", t("Upcoming"), "z"
+                        sub = f'{t("Due date")}: {r["due"].isoformat()}'
+                    if r["late"]:
+                        sub += f' · {tf("{n} days late", n=int(r["late"]))}'
+                    sched.append({
+                        "icon": icon, "tone": tone, "title": f'{t("Instalment")} {r["no"]}', "sub": sub,
+                        "amt": inr(r["penalty"]) if r["penalty"] else "", "amt_cls": "neg",
+                        "chip": chip, "chip_cls": ccls,
+                    })
+                show_list(f"sched_{l['id']}", sched, step=12)
 
 
 def page_dashboard():
@@ -3042,14 +3159,15 @@ def page_dashboard():
             st.altair_chart(chart, use_container_width=True)
     with right:
         st.subheader(t("Recent activity"))
+        recent = []
         for _, r in df.sort_values(["date", "id"], ascending=False).head(6).iterrows():
             pos = r["signed"] > 0
-            st.markdown(
-                f'<div class="act"><div><div class="l">{escape(r["party"])}</div>'
-                f'<div class="s">{escape(t(r["kind"]))}, {r["date"]}{(", " + escape(t(r["mode"]))) if r["mode"] else ""}</div></div>'
-                f'<div class="a {"pos" if pos else "neg"}">{"+" if pos else "−"}{inr(r["amount"])}</div></div>',
-                unsafe_allow_html=True,
-            )
+            recent.append({
+                "icon": KIND_ICONS.get(r["kind"], "•"), "tone": "g" if pos else "r", "title": r["party"],
+                "sub": f'{t(r["kind"])} · {r["date"]}' + (f' · {t(r["mode"])}' if r["mode"] else ""),
+                "amt": ("+" if pos else "−") + inr(r["amount"]), "amt_cls": "pos" if pos else "neg",
+            })
+        st.markdown(list_html(recent), unsafe_allow_html=True)
 
     if not inc.empty:
         st.subheader(t("Monthly income"))
@@ -3129,12 +3247,11 @@ def cash_spend_section():
             st.progress(min(max(spent / total, 0.0), 1.0) if total > 0 else 0.0)
             st.caption(tf("Spent {s} of {a}", s=inr(spent), a=inr(total)))
             if not mine.empty:
-                tbl = mine.sort_values(["date", "id"], ascending=False)[["date", "place", "amount", "note"]]
-                tbl = tbl.rename(columns={"date": "Date", "place": "Place", "amount": "Amount", "note": "Note"})
-                show_df(
-                    tbl, hide_index=True, use_container_width=True,
-                    column_config={"Amount": st.column_config.NumberColumn(format="₹%.2f")},
-                )
+                items = [{
+                    "icon": "🛒", "tone": "r", "title": x["place"], "sub": f'{x["date"]}' + (f' · {x["note"]}' if x["note"] else ""),
+                    "amt": inr(x["amount"]), "amt_cls": "neg",
+                } for _, x in mine.sort_values(["date", "id"], ascending=False).iterrows()]
+                show_list(f"cash_sp_{eid}", items, step=10)
                 labels = {
                     int(x["id"]): f"{x['date']} | {x['place']} | {inr(x['amount'])}"
                     for _, x in mine.iterrows()
