@@ -4,9 +4,17 @@ Three pages: Dashboard, New entry, Admin panel (Edit records, Backup & restore a
 """
 
 import calendar
+import hashlib
+import json
 import re
 import hmac
+import secrets
+import shutil
 import sqlite3
+import time
+import urllib.parse
+import urllib.request
+import zipfile
 from contextlib import closing
 from datetime import date, timedelta
 from html import escape
@@ -18,7 +26,17 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-DB_PATH = Path(__file__).with_name("udhari.db")
+# Har user ka alag database: data/user_<id>.db ; sabki profile: data/users.db
+DATA_DIR = Path(__file__).with_name("data")
+USERS_DB = DATA_DIR / "users.db"
+LEGACY_DB = Path(__file__).with_name("udhari.db")  # purana single-user data (admin kholta hai)
+OTP_TTL = 300          # OTP 5 minute chalta hai
+OTP_COOLDOWN = 30      # dobara OTP 30 second baad
+OTP_MAX_TRIES = 5
+OTP_PER_HOUR = 5       # ek number par ghante me max OTP
+LOGIN_MAX_FAILS = 5
+LOGIN_LOCK_SECS = 600
+MIN_PASSWORD = 6
 
 # +1 increases the amount receivable from the party, -1 reduces it.
 KINDS = {
@@ -54,7 +72,7 @@ BLUE = "#0f3d4c"
 
 P_DASH = "Dashboard"
 P_NEW = "New entry"
-P_EDIT = "Admin panel"
+P_EDIT = "Edit & Backup"
 P_SAVE = "My Savings"
 PAGES = [P_DASH, P_SAVE, P_NEW, P_EDIT]  # Admin panel is always last
 
@@ -562,6 +580,97 @@ HI = {
         "नमस्ते {name}, मुझे आपके {amt} देने हैं। यह राशि {d} तक चुका दी जाएगी। धैर्य रखने के लिए धन्यवाद।",
 }
 
+NEW_HI = {
+    "Edit & Backup": "संपादन और बैकअप",
+    "Sign in, or create your own account.": "साइन इन करें, या अपना खाता बनाएँ।",
+    "Login": "लॉगिन", "Create account": "खाता बनाएँ", "Forgot password": "पासवर्ड भूल गए",
+    "Account": "खाता",
+    "#### 🔑 Login": "#### 🔑 लॉगिन",
+    "#### 🆕 Create account": "#### 🆕 खाता बनाएँ",
+    "#### 🔁 Forgot password": "#### 🔁 पासवर्ड भूल गए",
+    "#### 📱 Mobile number": "#### 📱 मोबाइल नंबर",
+    "Mobile number (your username)": "मोबाइल नंबर (यही आपका यूज़र नाम है)",
+    "Mobile number": "मोबाइल नंबर",
+    "This number will be your username.": "यही नंबर आपका यूज़र नाम होगा।",
+    "Enter your mobile number and password.": "अपना मोबाइल नंबर और पासवर्ड डालें।",
+    "Incorrect mobile number or password.": "मोबाइल नंबर या पासवर्ड गलत है।",
+    "Too many wrong attempts. Try again after 10 minutes.": "बहुत ज़्यादा गलत कोशिशें। 10 मिनट बाद फिर कोशिश करें।",
+    "Enter a valid 10-digit mobile number.": "सही 10 अंकों का मोबाइल नंबर डालें।",
+    "This number is already registered. Please log in.": "यह नंबर पहले से रजिस्टर है। कृपया लॉगिन करें।",
+    "This number is not registered. Please create an account.": "यह नंबर रजिस्टर नहीं है। कृपया खाता बनाएँ।",
+    "Send OTP": "OTP भेजें", "Verify OTP": "OTP जाँचें", "Resend OTP": "OTP दोबारा भेजें",
+    "Change number": "नंबर बदलें",
+    "Enter the 6-digit OTP": "6 अंकों का OTP डालें",
+    "OTP sent to +91 {p}": "+91 {p} पर OTP भेजा गया",
+    "Demo mode: the SMS service is not set up, so the OTP is shown here: {o}":
+        "डेमो मोड: SMS सेवा चालू नहीं है, इसलिए OTP यहाँ दिख रहा है: {o}",
+    "Wrong OTP. {n} tries left.": "OTP गलत है। {n} कोशिशें बाकी हैं।",
+    "Too many wrong OTPs. Tap Resend OTP to get a new one.": "बहुत ज़्यादा गलत OTP। नया OTP पाने के लिए 'OTP दोबारा भेजें' दबाएँ।",
+    "OTP expired. Tap Resend OTP to get a new one.": "OTP की समय सीमा खत्म। नया OTP पाने के लिए 'OTP दोबारा भेजें' दबाएँ।",
+    "OTP could not be sent. Please try again in a minute.": "OTP नहीं भेजा जा सका। एक मिनट बाद फिर कोशिश करें।",
+    "Please wait 30 seconds before asking for a new OTP.": "नया OTP माँगने से पहले 30 सेकंड रुकें।",
+    "Too many OTP requests for this number. Try again after 1 hour.": "इस नंबर पर बहुत OTP माँगे गए। 1 घंटे बाद कोशिश करें।",
+    "Step {n} of 4": "चरण {n} / 4",
+    "Number verified: {p}": "नंबर सत्यापित: {p}",
+    "Full name": "पूरा नाम", "Father's name": "पिता का नाम", "Age": "उम्र",
+    "Aadhaar number (12 digits)": "आधार नंबर (12 अंक)",
+    "Save and continue": "सेव करें और आगे बढ़ें",
+    "Enter a valid name and father's name.": "सही नाम और पिता का नाम डालें।",
+    "Enter a valid 12-digit Aadhaar number.": "सही 12 अंकों का आधार नंबर डालें।",
+    "This Aadhaar number is already registered.": "यह आधार नंबर पहले से रजिस्टर है।",
+    "Username: {p}": "यूज़र नाम: {p}",
+    "Create password": "पासवर्ड बनाएँ", "Confirm password": "पासवर्ड दोबारा डालें",
+    "At least 6 characters.": "कम से कम 6 अक्षर।",
+    "OK, create my account": "ठीक है, मेरा खाता बनाएँ",
+    "Password must be at least 6 characters.": "पासवर्ड कम से कम 6 अक्षर का होना चाहिए।",
+    "Both passwords must be the same.": "दोनों पासवर्ड एक जैसे होने चाहिए।",
+    "This number or Aadhaar is already registered.": "यह नंबर या आधार पहले से रजिस्टर है।",
+    "Account created. Your username is {p}.": "खाता बन गया। आपका यूज़र नाम {p} है।",
+    "New password": "नया पासवर्ड", "Change password": "पासवर्ड बदलें",
+    "Password changed. Please log in.": "पासवर्ड बदल गया। कृपया लॉगिन करें।",
+    "Password changed.": "पासवर्ड बदल गया।",
+    "🛠 Admin login": "🛠 एडमिन लॉगिन", "Admin ID": "एडमिन आईडी", "Admin password": "एडमिन पासवर्ड",
+    "Admin sign in": "एडमिन साइन इन", "Admin": "एडमिन",
+    "Incorrect admin ID or password.": "एडमिन आईडी या पासवर्ड गलत है।",
+    "A default admin password is in use. Set ADMIN_PASSWORD in the app Secrets.":
+        "डिफ़ॉल्ट एडमिन पासवर्ड चल रहा है। ऐप के Secrets में ADMIN_PASSWORD सेट करें।",
+    "Logout": "लॉगआउट",
+    "Editing old records is protected. Enter your account password to continue.":
+        "पुराने रिकॉर्ड बदलना सुरक्षित है। आगे बढ़ने के लिए अपना खाता पासवर्ड डालें।",
+    "Account password": "खाता पासवर्ड",
+    "Admin — all users": "एडमिन — सभी यूज़र", "Every person's profile and ledger": "हर व्यक्ति की प्रोफ़ाइल और खाता-बही",
+    "On Streamlit Cloud the files can be lost when the app restarts. Download a full backup regularly.":
+        "Streamlit Cloud पर ऐप रीस्टार्ट होने पर फ़ाइलें मिट सकती हैं। नियमित रूप से पूरा बैकअप डाउनलोड करें।",
+    "Total users": "कुल यूज़र", "Joined today": "आज जुड़े",
+    "#### All users": "#### सभी यूज़र", "No users yet.": "अभी कोई यूज़र नहीं है।",
+    "Show full Aadhaar numbers": "पूरे आधार नंबर दिखाएँ",
+    "ID": "आईडी", "Mobile": "मोबाइल", "Aadhaar": "आधार", "Joined": "जुड़ने की तारीख",
+    "Last login": "आखिरी लॉगिन", "Entries": "एंट्री",
+    "#### Manage a user": "#### यूज़र संभालें", "Select user": "यूज़र चुनें",
+    "Open this user's ledger": "इस यूज़र की खाता-बही खोलें",
+    "Reset this user's password": "इस यूज़र का पासवर्ड रीसेट करें",
+    "Delete this user": "इस यूज़र को हटाएँ",
+    "This permanently deletes the user and all of their data.": "इससे यूज़र और उसका सारा डेटा हमेशा के लिए हट जाएगा।",
+    "Type the mobile number {p} to confirm": "पुष्टि के लिए मोबाइल नंबर {p} लिखें",
+    "Delete user": "यूज़र हटाएँ", "User deleted.": "यूज़र हटा दिया गया।",
+    "Old data (from before accounts)": "पुराना डेटा (खाते बनने से पहले का)",
+    "{n} entries in the old single-user file.": "पुरानी फ़ाइल में {n} एंट्री हैं।",
+    "Open old data": "पुराना डेटा खोलें", "Old data": "पुराना डेटा",
+    "Copy the old data to the selected user (replaces that user's current data)":
+        "पुराना डेटा चुने हुए यूज़र को दें (उसका मौजूदा डेटा बदल जाएगा)",
+    "Give old data to selected user": "पुराना डेटा चुने हुए यूज़र को दें",
+    "Old data copied.": "पुराना डेटा कॉपी हो गया।",
+    "#### Backup & restore of everything": "#### सबका बैकअप और रिस्टोर",
+    "Download full backup (zip)": "पूरा बैकअप डाउनलोड करें (zip)",
+    "Restore full backup": "पूरा बैकअप रिस्टोर करें", "Backup zip": "बैकअप zip",
+    "I understand this replaces the current data of all users in the zip":
+        "मैं समझता/समझती हूँ कि zip में मौजूद सभी यूज़र का मौजूदा डेटा बदल जाएगा",
+    "Restore": "रिस्टोर", "Backup restored.": "बैकअप रिस्टोर हो गया।",
+    "This file is not a valid backup of this app.": "यह फ़ाइल इस ऐप का सही बैकअप नहीं है।",
+    "Viewing: {n}": "देख रहे हैं: {n}", "Back to all users": "सभी यूज़र पर वापस",
+}
+HI.update(NEW_HI)
+
 HI_MONTHS = {
     "January": "जनवरी", "February": "फ़रवरी", "March": "मार्च", "April": "अप्रैल",
     "May": "मई", "June": "जून", "July": "जुलाई", "August": "अगस्त",
@@ -629,7 +738,7 @@ def load_language():
         st.session_state["lang"] = saved if saved in LANGS else "en"
 
 
-def language_picker():
+def language_picker(save=True):
     """English / Hindi switch. The choice is saved, so it applies to the whole app."""
     codes = list(LANGS)
     cur = lang()
@@ -639,7 +748,8 @@ def language_picker():
     )
     if pick != cur:
         st.session_state["lang"] = pick
-        set_setting("lang", pick)
+        if save:
+            set_setting("lang", pick)
         st.rerun()
 
 
@@ -648,9 +758,9 @@ st.set_page_config(page_title="Balance Sheet", page_icon="📒", layout="wide",
 
 CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:wght@600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:wght@600;700&display=swap');
 
-.stApp { font-family: 'IBM Plex Sans', 'Noto Sans Devanagari', system-ui, -apple-system, 'Segoe UI', sans-serif; }
+.stApp { font-family: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif; }
 h1, h2, h3, h4 {
     font-family: 'Source Serif 4', Georgia, serif !important;
     font-weight: 600 !important; letter-spacing: -0.01em; color: #14202b;
@@ -748,133 +858,6 @@ section[data-testid="stSidebar"] div[role="radiogroup"] > label { width: 100%; }
     .hero { padding: 16px 18px; }
     .kpi .val { font-size: 1.5rem; }
 }
-
-/* ================= NAYA DESIGN ================= */
-:root { --navy:#0f3d4c; --teal:#1d6075; --mint:#e3f1ea; --ink:#14202b; --mut:#6b7885; --line:#d6e0e6; --card:#ffffff; }
-.stApp { background: linear-gradient(180deg,#e9f1f5 0, #f6f9fb 360px, #f6f9fb 100%); line-height: 1.6; }
-.stMarkdown p, .stMarkdown li { font-size: 1rem; line-height: 1.65; color: var(--ink); }
-
-/* ---- Header band ---- */
-.hero {
-    background: linear-gradient(120deg,#0f3d4c 0%,#1d6075 70%,#2a8196 100%) !important;
-    border-radius: 20px !important; border-bottom: 0 !important; padding: 26px 30px !important;
-    box-shadow: 0 10px 28px rgba(15,61,76,.28); position: relative; overflow: hidden;
-}
-.hero::after { content:""; position:absolute; right:-40px; top:-60px; width:200px; height:200px;
-    border-radius:50%; background: rgba(255,255,255,.08); }
-.hero h1 { color:#fff !important; font-size: 2rem !important; }
-.hero p, .stMarkdown .hero p { color:#d5e8ee !important; font-size:1rem !important; }
-
-/* ---- Titles: sabse bada -> chhota ---- */
-h3 { font-size:1.45rem !important; color:var(--navy) !important; }
-h4 { font-size:1.3rem !important; color:var(--navy) !important; border-left:6px solid #2a8196;
-     padding-left:12px; margin:.8rem 0 .3rem; }
-[data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] label {
-    border:0 !important; background:transparent !important; box-shadow:none !important;
-    padding:0 !important; min-height:0 !important; display:block !important;
-}
-[data-testid="stWidgetLabel"] p { font-size:1.08rem !important; font-weight:700 !important; color:var(--navy) !important; margin-bottom:2px; }
-[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] * {
-    font-size:.88rem !important; line-height:1.5 !important; color:var(--mut) !important; font-weight:400 !important;
-}
-
-/* ---- Cards: form, bordered box, expander, metric ---- */
-[data-testid="stForm"], [data-testid="stVerticalBlockBorderWrapper"]:has(> div > [data-testid="stVerticalBlock"] [data-testid="stWidgetLabel"]),
-[data-testid="stExpander"], [data-testid="stMetric"] {
-    background:var(--card) !important; border:1px solid var(--line) !important;
-    border-radius:18px !important; box-shadow:0 4px 14px rgba(15,61,76,.07);
-}
-[data-testid="stForm"] { padding:18px 20px !important; }
-[data-testid="stMetric"] { padding:14px 18px; }
-[data-testid="stMetricLabel"] p { font-size:.95rem !important; font-weight:600; color:var(--mut); }
-[data-testid="stMetricValue"] { font-size:1.7rem !important; color:var(--navy); }
-[data-testid="stExpander"] summary p { font-size:1.05rem !important; font-weight:700; color:var(--navy); }
-
-/* ---- Input boxes ---- */
-[data-baseweb="input"] > div, [data-baseweb="base-input"], [data-baseweb="select"] > div, textarea {
-    background:#f3f7f9 !important; border:1.5px solid #cfdbe2 !important; border-radius:12px !important;
-    min-height:3.1rem; transition:all .15s ease;
-}
-[data-baseweb="input"] input, [data-baseweb="base-input"] input, [data-baseweb="select"] div, textarea {
-    font-size:1.05rem !important; color:var(--ink) !important; font-weight:500;
-}
-[data-baseweb="input"] > div:focus-within, [data-baseweb="select"] > div:focus-within, textarea:focus {
-    background:#fff !important; border-color:var(--teal) !important; box-shadow:0 0 0 4px rgba(29,96,117,.15) !important;
-}
-
-/* ---- Choices: ek 'tab bar' (track) ke andar badi goliyan ---- */
-[data-testid="stRadio"] [role="radiogroup"] {
-    background:#dfe9ee; padding:6px; border-radius:18px; gap:6px !important;
-    display:inline-flex !important; flex-wrap:wrap !important; max-width:100%;
-    box-shadow: inset 0 1px 3px rgba(15,61,76,.12);
-}
-[data-testid="stRadio"] label[data-baseweb="radio"] {
-    position:relative; margin:0 !important; cursor:pointer; user-select:none;
-    min-height:3.1rem !important; padding:.4rem 1.2rem !important;
-    border:0 !important; border-radius:13px !important; background:transparent !important; box-shadow:none !important;
-    display:inline-flex !important; align-items:center; justify-content:center; flex:1 1 auto;
-    transition:all .15s ease; -webkit-tap-highlight-color:transparent;
-}
-[data-testid="stRadio"] label[data-baseweb="radio"]::before { content:none !important; }
-[data-testid="stRadio"] label[data-baseweb="radio"] > div:first-of-type { display:none !important; }
-[data-testid="stRadio"] label[data-baseweb="radio"] > div:nth-of-type(2) { display:block !important; }
-[data-testid="stRadio"] label[data-baseweb="radio"] input {
-    position:absolute !important; inset:0 !important; width:100% !important; height:100% !important;
-    opacity:0 !important; margin:0 !important; cursor:pointer; z-index:2;
-}
-[data-testid="stRadio"] label[data-baseweb="radio"] p, [data-testid="stRadio"] label[data-baseweb="radio"] div {
-    font-size:1rem !important; font-weight:600 !important; color:#4a5a66; line-height:1.35; text-align:center;
-}
-[data-testid="stRadio"] label[data-baseweb="radio"]:hover { background:rgba(255,255,255,.65) !important; }
-[data-testid="stRadio"] label[data-baseweb="radio"]:active { transform:scale(.96); }
-[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {
-    background:linear-gradient(135deg,#0f3d4c,#1d6075) !important; box-shadow:0 4px 12px rgba(15,61,76,.35) !important;
-}
-[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) p,
-[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) div { color:#fff !important; font-weight:700 !important; }
-/* Section (upar) bada; Record type (neeche) chhota aur halka */
-[class*="st-key-admin_section"] [data-testid="stRadio"] label[data-baseweb="radio"] p { font-size:1.1rem !important; }
-[class*="st-key-edit_type"] [data-testid="stRadio"] [role="radiogroup"] { background:transparent; box-shadow:none; padding:0; gap:8px !important; }
-[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"] {
-    min-height:2.6rem !important; padding:.25rem 1rem !important; border:1.5px solid #b9c9d2 !important;
-    background:#fff !important; border-radius:999px !important; flex:0 0 auto;
-}
-[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"] p { font-size:.92rem !important; }
-[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {
-    background:#d4e9ef !important; border-color:#1d6075 !important; box-shadow:none !important;
-}
-[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) p,
-[class*="st-key-edit_type"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) div { color:#0f3d4c !important; }
-
-/* ---- Buttons ---- */
-.stButton > button, .stDownloadButton > button, .stLinkButton > a, [data-testid="stFormSubmitButton"] > button {
-    min-height:3.3rem !important; border:1.5px solid #bccbd4; border-radius:14px !important; background:#fff;
-    font-weight:700 !important; box-shadow:0 2px 6px rgba(15,61,76,.10); transition:all .15s ease;
-}
-.stButton > button p, .stDownloadButton > button p, [data-testid="stFormSubmitButton"] > button p { font-size:1.05rem !important; font-weight:700 !important; }
-.stButton > button:hover, .stDownloadButton > button:hover { border-color:var(--teal); transform:translateY(-2px); box-shadow:0 8px 18px rgba(15,61,76,.18); }
-.stButton > button:active, [data-testid="stFormSubmitButton"] > button:active { transform:scale(.97); }
-.stButton > button[kind="primary"], [data-testid="stFormSubmitButton"] > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
-    background:linear-gradient(135deg,#0f3d4c,#1d6075) !important; border-color:#0f3d4c !important; box-shadow:0 8px 20px rgba(15,61,76,.32);
-}
-.stButton > button[kind="primary"] *, [data-testid="stFormSubmitButton"] > button[kind="primary"] *, .stDownloadButton > button[kind="primary"] * { color:#fff !important; }
-
-/* ---- Messages: rangeen patti ke saath ---- */
-[data-testid="stAlert"] { border-radius:14px; border-left:6px solid currentColor; box-shadow:0 3px 10px rgba(15,61,76,.07); }
-[data-testid="stAlert"] p { font-size:.98rem !important; line-height:1.55; font-weight:500; }
-button[data-baseweb="tab"] p { font-size:1.05rem !important; font-weight:700; }
-hr { border-color:var(--line) !important; }
-
-/* ---- Dashboard cards ---- */
-.kpi { border-radius:16px !important; box-shadow:0 4px 14px rgba(15,61,76,.08); background:#fff !important; }
-.kpi .lbl { font-size:.92rem; } .kpi .sub { font-size:.86rem; }
-.pmeta { font-size:.88rem; } .act .s { font-size:.86rem; } .chip { font-size:.84rem; border-radius:999px !important; }
-
-@media (max-width:640px){
-    .hero { padding:20px 20px !important; border-radius:16px !important; }
-    [data-testid="stRadio"] [role="radiogroup"] { display:flex !important; width:100%; }
-    [data-testid="stRadio"] label[data-baseweb="radio"] { padding:.4rem .8rem !important; }
-}
 </style>
 
 """
@@ -948,7 +931,7 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 # ---------------------------------------------------------------- database
 def run(sql, params=()):
-    with closing(sqlite3.connect(DB_PATH)) as c:
+    with closing(sqlite3.connect(db_path())) as c:
         c.execute("PRAGMA foreign_keys = ON")
         cur = c.execute(sql, params)
         c.commit()
@@ -956,12 +939,12 @@ def run(sql, params=()):
 
 
 def query_df(sql, params=()):
-    with closing(sqlite3.connect(DB_PATH)) as c:
+    with closing(sqlite3.connect(db_path())) as c:
         return pd.read_sql_query(sql, c, params=params)
 
 
 def init_db():
-    with closing(sqlite3.connect(DB_PATH)) as c:
+    with closing(sqlite3.connect(db_path())) as c:
         c.executescript(
             """
             CREATE TABLE IF NOT EXISTS parties(
@@ -1184,28 +1167,688 @@ def summary_df():
     return out
 
 
-# ---------------------------------------------------------------- login
-def check_password():
-    """Agar secrets me APP_PASSWORD set hai to login maangta hai."""
+# ---------------------------------------------------------------- accounts (multi-user)
+# Har user ka apna alag database (data/user_<id>.db). Sab users ki profile data/users.db me.
+# Admin kisi bhi user ka data khol sakta hai. User sirf apna data dekhta hai.
+AUTH_MODES = ["Login", "Create account", "Forgot password"]
+AUTH_ICONS = {"Login": "🔑 ", "Create account": "🆕 ", "Forgot password": "🔁 "}
+
+
+def db_path():
+    p = st.session_state.get("db_path")
+    if not p:
+        raise RuntimeError("No user data file is selected.")
+    return p
+
+
+def user_db_path(uid):
+    return DATA_DIR / f"user_{int(uid)}.db"
+
+
+def users_conn():
+    DATA_DIR.mkdir(exist_ok=True)
+    c = sqlite3.connect(USERS_DB)
+    c.row_factory = sqlite3.Row
+    return c
+
+
+def init_users_db():
+    with closing(users_conn()) as c:
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS users(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phone TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                father_name TEXT NOT NULL,
+                age INTEGER NOT NULL,
+                aadhaar TEXT UNIQUE NOT NULL,
+                pw_salt TEXT NOT NULL,
+                pw_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_login TEXT DEFAULT '',
+                fails INTEGER DEFAULT 0,
+                locked_until REAL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS otp_log(phone TEXT NOT NULL, ts REAL NOT NULL);
+            """
+        )
+        c.commit()
+
+
+# ---- helpers: phone, aadhaar, password
+def norm_phone(s):
+    d = re.sub(r"\D", "", str(s or ""))
+    if len(d) == 12 and d.startswith("91"):
+        d = d[2:]
+    elif len(d) == 11 and d.startswith("0"):
+        d = d[1:]
+    return d
+
+
+def valid_phone(p):
+    return bool(re.fullmatch(r"[6-9]\d{9}", p or ""))
+
+
+def mask_phone(p):
+    return "XXXXXX" + p[-4:] if p else ""
+
+
+_VD = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+       [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+       [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+       [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]]
+_VP = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+       [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+       [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]]
+
+
+def verhoeff_ok(num):
+    c = 0
+    for i, ch in enumerate(reversed(num)):
+        c = _VD[c][_VP[i % 8][int(ch)]]
+    return c == 0
+
+
+def norm_aadhaar(s):
+    return re.sub(r"\D", "", str(s or ""))
+
+
+def valid_aadhaar(a):
+    return bool(re.fullmatch(r"[2-9]\d{11}", a or "")) and verhoeff_ok(a)
+
+
+def fmt_aadhaar(a, reveal=False):
+    a = str(a or "")
+    if len(a) != 12:
+        return a
+    return f"{a[:4]} {a[4:8]} {a[8:]}" if reveal else f"XXXX XXXX {a[8:]}"
+
+
+def hash_pw(password, salt=None):
+    salt = salt or secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 200_000).hex()
+    return salt, h
+
+
+def check_pw(password, salt, h):
+    return hmac.compare_digest(hash_pw(password, salt)[1], h)
+
+
+def clean_name(s):
+    return re.sub(r"\s+", " ", str(s or "")).strip()
+
+
+def valid_name(s):
+    return len(s) >= 2 and not re.search(r"\d", s)
+
+
+# ---- OTP (SMS). Fast2SMS key milte hi asli SMS jata hai, warna demo mode (OTP screen par dikhta hai)
+def sms_key():
     try:
-        pw = st.secrets.get("APP_PASSWORD")
+        return st.secrets.get("FAST2SMS_KEY")
     except Exception:
-        pw = None
-    if not pw or st.session_state.get("logged_in"):
-        return True
-    _, mid, _ = st.columns([1, 1.2, 1])
-    with mid:
-        hero("Balance Sheet", "Sign in to access your ledger.")
-        with st.form("login"):
-            entered = st.text_input(t("Password"), type="password")
-            ok = st.form_submit_button(t("Sign in"), use_container_width=True, type="primary")
-        if ok:
-            if hmac.compare_digest(entered.encode(), str(pw).encode()):
-                st.session_state["logged_in"] = True
-                st.rerun()
-            else:
-                st.error(t("Incorrect password."))
+        return None
+
+
+def send_sms_otp(phone, otp):
+    """Returns 'sent' (SMS gaya), 'demo' (SMS service set nahi) ya 'fail'."""
+    key = sms_key()
+    if not key:
+        return "demo"
+    try:
+        qs = urllib.parse.urlencode(
+            {"authorization": key, "route": "otp", "variables_values": otp, "numbers": phone}
+        )
+        req = urllib.request.Request(
+            "https://www.fast2sms.com/dev/bulkV2?" + qs, headers={"cache-control": "no-cache"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode())
+        return "sent" if data.get("return") else "fail"
+    except Exception:
+        return "fail"
+
+
+def _otp_hash(purpose, phone, code):
+    return hashlib.sha256(f"{purpose}:{phone}:{code}".encode()).hexdigest()
+
+
+def otp_issue(purpose, phone):
+    """'sent' | 'demo' | 'fail' | 'wait' | 'limit'"""
+    now = time.time()
+    o = st.session_state.get("otp")
+    if o and o["phone"] == phone and o["purpose"] == purpose and now - o["sent"] < OTP_COOLDOWN:
+        return "wait"
+    with closing(users_conn()) as c:
+        c.execute("DELETE FROM otp_log WHERE ts < ?", (now - 3600,))
+        n = c.execute("SELECT COUNT(*) FROM otp_log WHERE phone = ?", (phone,)).fetchone()[0]
+        if n >= OTP_PER_HOUR:
+            c.commit()
+            return "limit"
+        code = f"{secrets.randbelow(10 ** 6):06d}"
+        status = send_sms_otp(phone, code)
+        if status == "fail":
+            c.commit()
+            return "fail"
+        c.execute("INSERT INTO otp_log(phone, ts) VALUES (?, ?)", (phone, now))
+        c.commit()
+    st.session_state["otp"] = {
+        "purpose": purpose, "phone": phone, "hash": _otp_hash(purpose, phone, code),
+        "exp": now + OTP_TTL, "tries": 0, "sent": now, "demo": code if status == "demo" else "",
+    }
+    return status
+
+
+def otp_check(purpose, phone, entered):
+    """'ok' | 'bad' | 'expired' | 'locked' | 'none'"""
+    o = st.session_state.get("otp")
+    if not o or o["phone"] != phone or o["purpose"] != purpose:
+        return "none"
+    if time.time() > o["exp"]:
+        return "expired"
+    if o["tries"] >= OTP_MAX_TRIES:
+        return "locked"
+    o["tries"] += 1
+    if hmac.compare_digest(_otp_hash(purpose, phone, str(entered).strip()), o["hash"]):
+        st.session_state.pop("otp", None)
+        return "ok"
+    return "bad"
+
+
+def otp_error(status):
+    msg = {
+        "fail": "OTP could not be sent. Please try again in a minute.",
+        "wait": "Please wait 30 seconds before asking for a new OTP.",
+        "limit": "Too many OTP requests for this number. Try again after 1 hour.",
+    }.get(status)
+    if msg:
+        st.error(t(msg))
+
+
+# ---- users
+def user_exists(phone):
+    with closing(users_conn()) as c:
+        return c.execute("SELECT 1 FROM users WHERE phone = ?", (phone,)).fetchone() is not None
+
+
+def aadhaar_used(a):
+    with closing(users_conn()) as c:
+        return c.execute("SELECT 1 FROM users WHERE aadhaar = ?", (a,)).fetchone() is not None
+
+
+def create_user(phone, name, father, age, aadhaar, password):
+    salt, h = hash_pw(password)
+    with closing(users_conn()) as c:
+        try:
+            cur = c.execute(
+                "INSERT INTO users(phone, name, father_name, age, aadhaar, pw_salt, pw_hash, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (phone, name, father, int(age), aadhaar, salt, h, date.today().isoformat()),
+            )
+            c.commit()
+        except sqlite3.IntegrityError:
+            return None
+        return c.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone()
+
+
+def login_user(phone, password):
+    """('ok', row) | ('locked', None) | ('bad', None)"""
+    with closing(users_conn()) as c:
+        row = c.execute("SELECT * FROM users WHERE phone = ?", (phone,)).fetchone()
+        if row is None:
+            hash_pw(password, "00" * 16)  # same time lagta hai
+            return "bad", None
+        if row["locked_until"] and row["locked_until"] > time.time():
+            return "locked", None
+        if check_pw(password, row["pw_salt"], row["pw_hash"]):
+            c.execute("UPDATE users SET fails = 0, locked_until = 0, last_login = ? WHERE id = ?",
+                      (date.today().isoformat(), row["id"]))
+            c.commit()
+            return "ok", row
+        fails = int(row["fails"] or 0) + 1
+        lock = time.time() + LOGIN_LOCK_SECS if fails >= LOGIN_MAX_FAILS else 0
+        c.execute("UPDATE users SET fails = ?, locked_until = ? WHERE id = ?",
+                  (0 if lock else fails, lock, row["id"]))
+        c.commit()
+        return ("locked" if lock else "bad"), None
+
+
+def set_user_password(uid, password):
+    salt, h = hash_pw(password)
+    with closing(users_conn()) as c:
+        c.execute("UPDATE users SET pw_salt = ?, pw_hash = ?, fails = 0, locked_until = 0 WHERE id = ?",
+                  (salt, h, int(uid)))
+        c.commit()
+
+
+def verify_user_password(uid, password):
+    with closing(users_conn()) as c:
+        row = c.execute("SELECT pw_salt, pw_hash FROM users WHERE id = ?", (int(uid),)).fetchone()
+    return bool(row) and check_pw(password, row["pw_salt"], row["pw_hash"])
+
+
+def start_session(row):
+    keep = st.session_state.get("lang")
+    st.session_state.clear()
+    if keep:
+        st.session_state["lang"] = keep
+    st.session_state["auth"] = {"role": "user", "uid": int(row["id"]), "phone": row["phone"], "name": row["name"]}
+    st.session_state["db_path"] = str(user_db_path(row["id"]))
+    init_db()
+    saved = get_setting("lang", "")
+    if saved in LANGS:
+        st.session_state["lang"] = saved
+    st.session_state["page"] = P_DASH
+
+
+def logout():
+    keep = st.session_state.get("lang")
+    st.session_state.clear()
+    if keep:
+        st.session_state["lang"] = keep
+
+
+# ---- login page
+def login_ui():
+    st.markdown(t("#### 🔑 Login"))
+    with st.form("login_form"):
+        phone = st.text_input(t("Mobile number (your username)"), max_chars=15, placeholder="98XXXXXXXX")
+        pw = st.text_input(t("Password"), type="password")
+        ok = st.form_submit_button(t("Sign in"), use_container_width=True, type="primary")
+    if ok:
+        ph = norm_phone(phone)
+        if not valid_phone(ph) or not pw:
+            st.error(t("Enter your mobile number and password."))
+            return
+        status, row = login_user(ph, pw)
+        if status == "ok":
+            start_session(row)
+            st.rerun()
+        elif status == "locked":
+            st.error(t("Too many wrong attempts. Try again after 10 minutes."))
+        else:
+            st.error(t("Incorrect mobile number or password."))
+
+
+def otp_step_ui(purpose, phone, on_reset):
+    """OTP daalne ka box. True tab milta hai jab OTP sahi ho."""
+    o = st.session_state.get("otp")
+    st.success(tf("OTP sent to +91 {p}", p=mask_phone(phone)))
+    if o and o.get("demo"):
+        st.warning(tf("Demo mode: the SMS service is not set up, so the OTP is shown here: {o}", o=o["demo"]))
+    with st.form(f"otp_form_{purpose}"):
+        code = st.text_input(t("Enter the 6-digit OTP"), max_chars=6, placeholder="123456")
+        ok = st.form_submit_button(t("Verify OTP"), use_container_width=True, type="primary")
+    c1, c2 = st.columns(2)
+    if c1.button(t("Resend OTP"), key=f"resend_{purpose}", use_container_width=True):
+        s = otp_issue(purpose, phone)
+        if s in ("sent", "demo"):
+            st.rerun()
+        otp_error(s)
+    if c2.button(t("Change number"), key=f"change_{purpose}", use_container_width=True):
+        on_reset()
+        st.rerun()
+    if ok:
+        res = otp_check(purpose, phone, code)
+        if res == "ok":
+            return True
+        if res == "bad":
+            left = max(0, OTP_MAX_TRIES - st.session_state.get("otp", {}).get("tries", OTP_MAX_TRIES))
+            st.error(tf("Wrong OTP. {n} tries left.", n=left))
+        elif res == "locked":
+            st.error(t("Too many wrong OTPs. Tap Resend OTP to get a new one."))
+        else:
+            st.error(t("OTP expired. Tap Resend OTP to get a new one."))
     return False
+
+
+def _reg_reset():
+    st.session_state.pop("reg", None)
+    st.session_state.pop("otp", None)
+
+
+def register_ui():
+    reg = st.session_state.setdefault("reg", {"step": 1})
+    step = reg["step"]
+    if step >= 3 and not reg.get("verified"):
+        _reg_reset()
+        st.rerun()
+    st.markdown(t("#### 🆕 Create account"))
+    st.caption(tf("Step {n} of 4", n=step))
+
+    if step == 1:
+        with st.form("reg_phone"):
+            phone = st.text_input(t("Mobile number"), max_chars=15, placeholder="98XXXXXXXX",
+                                  help=t("This number will be your username."))
+            ok = st.form_submit_button(t("Send OTP"), use_container_width=True, type="primary")
+        if ok:
+            ph = norm_phone(phone)
+            if not valid_phone(ph):
+                st.error(t("Enter a valid 10-digit mobile number."))
+            elif user_exists(ph):
+                st.error(t("This number is already registered. Please log in."))
+            else:
+                s = otp_issue("reg", ph)
+                if s in ("sent", "demo"):
+                    reg.update(phone=ph, step=2)
+                    st.rerun()
+                otp_error(s)
+
+    elif step == 2:
+        if otp_step_ui("reg", reg["phone"], _reg_reset):
+            reg.update(verified=True, step=3)
+            st.rerun()
+
+    elif step == 3:
+        st.success("✅ " + tf("Number verified: {p}", p=reg["phone"]))
+        with st.form("reg_profile"):
+            name = st.text_input(t("Full name"))
+            father = st.text_input(t("Father's name"))
+            age = st.number_input(t("Age"), min_value=18, max_value=100, value=18, step=1)
+            aad = st.text_input(t("Aadhaar number (12 digits)"), max_chars=14, placeholder="1234 5678 9012")
+            ok = st.form_submit_button(t("Save and continue"), use_container_width=True, type="primary")
+        if ok:
+            name, father, a = clean_name(name), clean_name(father), norm_aadhaar(aad)
+            if not valid_name(name) or not valid_name(father):
+                st.error(t("Enter a valid name and father's name."))
+            elif not valid_aadhaar(a):
+                st.error(t("Enter a valid 12-digit Aadhaar number."))
+            elif aadhaar_used(a):
+                st.error(t("This Aadhaar number is already registered."))
+            else:
+                reg.update(profile={"name": name, "father": father, "age": int(age), "aadhaar": a}, step=4)
+                st.rerun()
+
+    else:
+        p = reg.get("profile")
+        if not p:
+            _reg_reset()
+            st.rerun()
+        st.info(tf("Username: {p}", p=reg["phone"]))
+        with st.form("reg_password"):
+            pw = st.text_input(t("Create password"), type="password", help=t("At least 6 characters."))
+            pw2 = st.text_input(t("Confirm password"), type="password")
+            ok = st.form_submit_button(t("OK, create my account"), use_container_width=True, type="primary")
+        if ok:
+            if len(pw) < MIN_PASSWORD:
+                st.error(t("Password must be at least 6 characters."))
+            elif pw != pw2:
+                st.error(t("Both passwords must be the same."))
+            else:
+                row = create_user(reg["phone"], p["name"], p["father"], p["age"], p["aadhaar"], pw)
+                if row is None:
+                    st.error(t("This number or Aadhaar is already registered."))
+                else:
+                    start_session(row)
+                    st.session_state["welcome"] = tf("Account created. Your username is {p}.", p=row["phone"])
+                    st.rerun()
+
+
+def _fp_reset():
+    st.session_state.pop("fp", None)
+    st.session_state.pop("otp", None)
+
+
+def forgot_ui():
+    fp = st.session_state.setdefault("fp", {"step": 1})
+    st.markdown(t("#### 🔁 Forgot password"))
+    if fp["step"] >= 3 and not fp.get("verified"):
+        _fp_reset()
+        st.rerun()
+    if fp["step"] == 1:
+        with st.form("fp_phone"):
+            phone = st.text_input(t("Mobile number"), max_chars=15, placeholder="98XXXXXXXX")
+            ok = st.form_submit_button(t("Send OTP"), use_container_width=True, type="primary")
+        if ok:
+            ph = norm_phone(phone)
+            if not valid_phone(ph):
+                st.error(t("Enter a valid 10-digit mobile number."))
+            elif not user_exists(ph):
+                st.error(t("This number is not registered. Please create an account."))
+            else:
+                s = otp_issue("fp", ph)
+                if s in ("sent", "demo"):
+                    fp.update(phone=ph, step=2)
+                    st.rerun()
+                otp_error(s)
+    elif fp["step"] == 2:
+        if otp_step_ui("fp", fp["phone"], _fp_reset):
+            fp.update(verified=True, step=3)
+            st.rerun()
+    else:
+        with st.form("fp_new"):
+            pw = st.text_input(t("New password"), type="password", help=t("At least 6 characters."))
+            pw2 = st.text_input(t("Confirm password"), type="password")
+            ok = st.form_submit_button(t("Change password"), use_container_width=True, type="primary")
+        if ok:
+            if len(pw) < MIN_PASSWORD:
+                st.error(t("Password must be at least 6 characters."))
+            elif pw != pw2:
+                st.error(t("Both passwords must be the same."))
+            else:
+                with closing(users_conn()) as c:
+                    row = c.execute("SELECT id FROM users WHERE phone = ?", (fp["phone"],)).fetchone()
+                if row:
+                    set_user_password(row["id"], pw)
+                _fp_reset()
+                st.session_state["auth_mode"] = "Login"
+                st.session_state["pw_changed"] = True
+                st.rerun()
+
+
+def admin_credentials():
+    try:
+        u = st.secrets.get("ADMIN_USER")
+        p = st.secrets.get("ADMIN_PASSWORD") or st.secrets.get("EDIT_PASSWORD")
+    except Exception:
+        u = p = None
+    return str(u or "admin"), str(p or EDIT_PASSWORD_DEFAULT), bool(p)
+
+
+def admin_login_ui():
+    user, pw, custom = admin_credentials()
+    if not custom:
+        st.warning(t("A default admin password is in use. Set ADMIN_PASSWORD in the app Secrets."))
+    with st.form("admin_login"):
+        a_user = st.text_input(t("Admin ID"))
+        a_pw = st.text_input(t("Admin password"), type="password")
+        ok = st.form_submit_button(t("Admin sign in"), use_container_width=True, type="primary")
+    if ok:
+        if time.time() < st.session_state.get("admin_lock", 0):
+            st.error(t("Too many wrong attempts. Try again after 10 minutes."))
+        elif (hmac.compare_digest(a_user.strip().encode(), user.encode())
+              and hmac.compare_digest(a_pw.encode(), pw.encode())):
+            keep = st.session_state.get("lang")
+            st.session_state.clear()
+            if keep:
+                st.session_state["lang"] = keep
+            st.session_state["auth"] = {"role": "admin"}
+            st.rerun()
+        else:
+            n = st.session_state.get("admin_fails", 0) + 1
+            st.session_state["admin_fails"] = 0 if n >= LOGIN_MAX_FAILS else n
+            if n >= LOGIN_MAX_FAILS:
+                st.session_state["admin_lock"] = time.time() + LOGIN_LOCK_SECS
+            time.sleep(1)
+            st.error(t("Incorrect admin ID or password."))
+
+
+def auth_gate():
+    """Sabse pehla page: Login / Create account / Forgot password / Admin. True = login ho chuka."""
+    if st.session_state.get("auth"):
+        return True
+    _, mid, _ = st.columns([1, 1.5, 1])
+    with mid:
+        hero("Balance Sheet", "Sign in, or create your own account.")
+        language_picker(save=False)
+        if st.session_state.pop("pw_changed", False):
+            st.success(t("Password changed. Please log in."))
+        mode = st.radio(
+            t("Account"), AUTH_MODES, horizontal=True, key="auth_mode", label_visibility="collapsed",
+            format_func=lambda x: AUTH_ICONS[x] + t(x),
+        )
+        {"Login": login_ui, "Create account": register_ui, "Forgot password": forgot_ui}[mode]()
+        st.write("")
+        with st.expander(t("🛠 Admin login")):
+            admin_login_ui()
+    return False
+
+
+def account_bar():
+    a = st.session_state["auth"]
+    c1, c2 = st.columns([4, 1])
+    c1.markdown(f"👤 **{escape(a['name'])}** · {escape(a['phone'])}")
+    c2.button(t("Logout"), key="logout_btn", on_click=logout, use_container_width=True)
+
+
+# ---- admin console: sab users ka data
+def users_df():
+    with closing(sqlite3.connect(USERS_DB)) as c:
+        return pd.read_sql_query(
+            "SELECT id, phone, name, father_name, age, aadhaar, created_at, last_login "
+            "FROM users ORDER BY id DESC", c)
+
+
+def count_entries(path):
+    if not Path(path).exists():
+        return 0
+    try:
+        with closing(sqlite3.connect(path)) as c:
+            return sum(c.execute(f"SELECT COUNT(*) FROM {tb}").fetchone()[0]
+                       for tb in ("txns", "income", "expenses", "loans", "loan_payments"))
+    except Exception:
+        return 0
+
+
+def open_ledger(path, label):
+    st.session_state["db_path"] = str(path)
+    st.session_state["viewing"] = label
+    st.session_state["page"] = P_DASH
+    init_db()
+
+
+def close_ledger():
+    for k in ("db_path", "viewing", "edit_ok"):
+        st.session_state.pop(k, None)
+
+
+def zip_all_data():
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for p in sorted(DATA_DIR.glob("*.db")):
+            z.write(p, p.name)
+        if LEGACY_DB.exists():
+            z.write(LEGACY_DB, "legacy_udhari.db")
+    return buf.getvalue()
+
+
+_RESTORE_OK = re.compile(r"^(users|user_\d+)\.db$|^legacy_udhari\.db$")
+
+
+def restore_all_data(raw):
+    """Zip ke andar sirf users.db, user_<n>.db, legacy_udhari.db hi allowed. Returns number of files."""
+    n = 0
+    with zipfile.ZipFile(BytesIO(raw)) as z:
+        names = [i for i in z.namelist() if not i.endswith("/")]
+        if not names or any(not _RESTORE_OK.match(i) for i in names):
+            raise ValueError("bad zip")
+        blobs = {i: z.read(i) for i in names}
+    if any(not b.startswith(b"SQLite format 3\x00") for b in blobs.values()):
+        raise ValueError("bad db")
+    DATA_DIR.mkdir(exist_ok=True)
+    for name, b in blobs.items():
+        (LEGACY_DB if name == "legacy_udhari.db" else DATA_DIR / name).write_bytes(b)
+        n += 1
+    return n
+
+
+def admin_console():
+    hero("Admin — all users", "Every person's profile and ledger")
+    c1, c2 = st.columns([4, 1])
+    c1.markdown("🛠 **" + t("Admin") + "**")
+    c2.button(t("Logout"), key="admin_logout", on_click=logout, use_container_width=True)
+    language_picker(save=False)
+    st.info(t("On Streamlit Cloud the files can be lost when the app restarts. Download a full backup regularly."))
+    flash = st.session_state.pop("admin_flash", None)
+    if flash:
+        st.success(t(flash))
+
+    df = users_df()
+    m1, m2 = st.columns(2)
+    m1.metric(t("Total users"), len(df))
+    m2.metric(t("Joined today"), int((df["created_at"] == date.today().isoformat()).sum()) if not df.empty else 0)
+
+    st.markdown(t("#### All users"))
+    if df.empty:
+        st.caption(t("No users yet."))
+    else:
+        reveal = st.checkbox(t("Show full Aadhaar numbers"), key="adm_reveal")
+        view = df.copy()
+        view["aadhaar"] = view["aadhaar"].map(lambda a: fmt_aadhaar(a, reveal))
+        view["entries"] = [count_entries(user_db_path(i)) for i in df["id"]]
+        view = view.rename(columns={
+            "id": "ID", "phone": "Mobile", "name": "Name", "father_name": "Father's name", "age": "Age",
+            "aadhaar": "Aadhaar", "created_at": "Joined", "last_login": "Last login", "entries": "Entries",
+        })
+        show_df(view, hide_index=True, use_container_width=True)
+
+        st.markdown(t("#### Manage a user"))
+        ids = [int(i) for i in df["id"]]
+        names = {int(r.id): f"{r.name} · {r.phone}" for r in df.itertuples()}
+        uid = st.selectbox(t("Select user"), ids, format_func=lambda i: names[i], key="adm_user")
+        if st.button("📂 " + t("Open this user's ledger"), type="primary", use_container_width=True, key="adm_open"):
+            open_ledger(user_db_path(uid), names[uid])
+            st.rerun()
+        with st.expander(t("Reset this user's password")):
+            with st.form("adm_reset"):
+                npw = st.text_input(t("New password"), type="password")
+                ok = st.form_submit_button(t("Change password"))
+            if ok:
+                if len(npw) < MIN_PASSWORD:
+                    st.error(t("Password must be at least 6 characters."))
+                else:
+                    set_user_password(uid, npw)
+                    st.success(t("Password changed."))
+        with st.expander(t("Delete this user")):
+            st.error(t("This permanently deletes the user and all of their data."))
+            row = df[df["id"] == uid].iloc[0]
+            word = st.text_input(tf("Type the mobile number {p} to confirm", p=row["phone"]), key="adm_del_word")
+            if st.button(t("Delete user"), key="adm_del", disabled=norm_phone(word) != row["phone"]):
+                with closing(users_conn()) as c:
+                    c.execute("DELETE FROM users WHERE id = ?", (int(uid),))
+                    c.commit()
+                user_db_path(uid).unlink(missing_ok=True)
+                st.session_state["admin_flash"] = "User deleted."
+                st.rerun()
+
+        if LEGACY_DB.exists():
+            with st.expander(t("Old data (from before accounts)")):
+                st.caption(tf("{n} entries in the old single-user file.", n=count_entries(LEGACY_DB)))
+                if st.button(t("Open old data"), key="adm_open_legacy"):
+                    open_ledger(LEGACY_DB, t("Old data"))
+                    st.rerun()
+                sure = st.checkbox(t("Copy the old data to the selected user (replaces that user's current data)"),
+                                   key="adm_legacy_sure")
+                if st.button(t("Give old data to selected user"), key="adm_legacy_give", disabled=not sure):
+                    shutil.copyfile(LEGACY_DB, user_db_path(uid))
+                    st.session_state["admin_flash"] = "Old data copied."
+                    st.rerun()
+
+    st.markdown(t("#### Backup & restore of everything"))
+    st.download_button("⬇️ " + t("Download full backup (zip)"), data=zip_all_data(),
+                       file_name=f"all_users_backup_{date.today().isoformat()}.zip",
+                       mime="application/zip", use_container_width=True)
+    with st.expander(t("Restore full backup")):
+        up = st.file_uploader(t("Backup zip"), type=["zip"], key="adm_restore_file")
+        sure = st.checkbox(t("I understand this replaces the current data of all users in the zip"), key="adm_restore_sure")
+        if st.button(t("Restore"), key="adm_restore", disabled=not (up and sure)):
+            try:
+                n = restore_all_data(up.getvalue())
+                st.session_state["admin_flash"] = "Backup restored."
+                st.rerun()
+            except Exception:
+                st.error(t("This file is not a valid backup of this app."))
 
 
 # ---------------------------------------------------------------- navigation
@@ -2814,7 +3457,7 @@ def template_xlsx():
 
 def wipe_all_data():
     """Saari tables ka poora data hata deta hai (ids bhi shuru se)."""
-    with closing(sqlite3.connect(DB_PATH)) as c:
+    with closing(sqlite3.connect(db_path())) as c:
         c.execute("PRAGMA foreign_keys = ON")
         for tbl in ("alert_acks", "cash_spends", "loan_payments", "loans", "followups", "txns", "parties", "income", "expenses"):
             c.execute(f"DELETE FROM {tbl}")
@@ -3164,17 +3807,18 @@ def edit_password():
 
 
 def edit_gate():
-    """Editing is locked until the edit password is entered."""
-    if st.session_state.get("edit_ok"):
+    """Apne purane records badalne se pehle user apna account password dalta hai (admin ko seedha access)."""
+    a = st.session_state.get("auth", {})
+    if a.get("role") == "admin" or st.session_state.get("edit_ok"):
         return True
     _, mid, _ = st.columns([1, 1.2, 1])
     with mid:
-        st.info(t("Editing old records is protected. Enter the edit password to continue."))
+        st.info(t("Editing old records is protected. Enter your account password to continue."))
         with st.form("edit_login"):
-            entered = st.text_input(t("Edit password"), type="password")
+            entered = st.text_input(t("Account password"), type="password")
             ok = st.form_submit_button(t("Unlock editing"), use_container_width=True, type="primary")
         if ok:
-            if hmac.compare_digest(entered.encode(), edit_password().encode()):
+            if verify_user_password(a.get("uid", 0), entered):
                 st.session_state["edit_ok"] = True
                 st.rerun()
             else:
@@ -3528,20 +4172,19 @@ def admin_transactions():
 
 
 def page_admin():
-    hero("Admin panel", "Transactions, editing of older records, backup & restore")
+    hero(P_EDIT, "Transactions, editing of older records, backup & restore")
     language_picker()
     if not edit_gate():
         return
     c1, c2 = st.columns([5, 1])
-    c1.success(t("Admin panel is unlocked for this session."), icon="🔓")
+    c1.caption(t("Admin panel is unlocked for this session."))
     c2.button(t("Lock"), on_click=lock_edit, use_container_width=True)
     flash = st.session_state.pop("flash", None)
     if flash:
         st.success(t(flash))
     section = st.radio(
         t("Section"), ["Transactions", "Edit records", "Backup & restore"], horizontal=True,
-        key="admin_section", label_visibility="collapsed",
-        format_func=lambda x: {"Transactions": "💸 ", "Edit records": "✏️ ", "Backup & restore": "💾 "}[x] + t(x),
+        key="admin_section", label_visibility="collapsed", format_func=t,
     )
     if section == "Transactions":
         admin_transactions()
@@ -3556,19 +4199,30 @@ def page_admin():
         "Loans": edit_loans,
         "Instalment / penalty payments": edit_loan_payments,
     }
-    _ic = {"Lending / borrowing": "🤝 ", "Income": "💰 ", "Expenses": "🧾 ", "Loans": "🏦 ", "Instalment / penalty payments": "📅 "}
-    pick = st.radio(t("Record type"), list(sections), horizontal=True, key="edit_type",
-                    format_func=lambda x: _ic.get(x, "") + t(x))
+    pick = st.radio(t("Record type"), list(sections), horizontal=True, key="edit_type", format_func=t)
     sections[pick]()
 
 
 # ---------------------------------------------------------------- main
 def main():
+    st.markdown(CSS, unsafe_allow_html=True)
+    init_users_db()
+    if not auth_gate():
+        return
+    auth = st.session_state["auth"]
+    if auth["role"] == "admin" and not st.session_state.get("db_path"):
+        admin_console()
+        return
     init_db()
     load_language()
-    st.markdown(CSS, unsafe_allow_html=True)
-    if not check_password():
-        return
+    if st.session_state.get("welcome"):
+        st.toast("✅ " + st.session_state.pop("welcome"))
+    if auth["role"] == "admin":
+        c1, c2 = st.columns([4, 1])
+        c1.warning("👁 " + tf("Viewing: {n}", n=st.session_state.get("viewing", "")))
+        c2.button(t("Back to all users"), key="back_users", on_click=close_ledger, use_container_width=True)
+    else:
+        account_bar()
     if "page" not in st.session_state or st.session_state["page"] not in PAGES:
         st.session_state["page"] = P_DASH
     st.sidebar.markdown(f'<div class="brand">{t("Balance Sheet")}</div>', unsafe_allow_html=True)
