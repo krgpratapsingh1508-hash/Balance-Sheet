@@ -613,18 +613,14 @@ NEW_HI = {
     "Step {n} of 4": "चरण {n} / 4",
     "Number verified: {p}": "नंबर सत्यापित: {p}",
     "Full name": "पूरा नाम", "Father's name": "पिता का नाम", "Age": "उम्र",
-    "Aadhaar number (12 digits)": "आधार नंबर (12 अंक)",
     "Save and continue": "सेव करें और आगे बढ़ें",
     "Enter a valid name and father's name.": "सही नाम और पिता का नाम डालें।",
-    "Enter a valid 12-digit Aadhaar number.": "सही 12 अंकों का आधार नंबर डालें।",
-    "This Aadhaar number is already registered.": "यह आधार नंबर पहले से रजिस्टर है।",
     "Username: {p}": "यूज़र नाम: {p}",
     "Create password": "पासवर्ड बनाएँ", "Confirm password": "पासवर्ड दोबारा डालें",
     "At least 6 characters.": "कम से कम 6 अक्षर।",
     "OK, create my account": "ठीक है, मेरा खाता बनाएँ",
     "Password must be at least 6 characters.": "पासवर्ड कम से कम 6 अक्षर का होना चाहिए।",
     "Both passwords must be the same.": "दोनों पासवर्ड एक जैसे होने चाहिए।",
-    "This number or Aadhaar is already registered.": "यह नंबर या आधार पहले से रजिस्टर है।",
     "Account created. Your username is {p}.": "खाता बन गया। आपका यूज़र नाम {p} है।",
     "New password": "नया पासवर्ड", "Change password": "पासवर्ड बदलें",
     "Password changed. Please log in.": "पासवर्ड बदल गया। कृपया लॉगिन करें।",
@@ -643,8 +639,7 @@ NEW_HI = {
         "Streamlit Cloud पर ऐप रीस्टार्ट होने पर फ़ाइलें मिट सकती हैं। नियमित रूप से पूरा बैकअप डाउनलोड करें।",
     "Total users": "कुल यूज़र", "Joined today": "आज जुड़े",
     "#### All users": "#### सभी यूज़र", "No users yet.": "अभी कोई यूज़र नहीं है।",
-    "Show full Aadhaar numbers": "पूरे आधार नंबर दिखाएँ",
-    "ID": "आईडी", "Mobile": "मोबाइल", "Aadhaar": "आधार", "Joined": "जुड़ने की तारीख",
+    "ID": "आईडी", "Mobile": "मोबाइल", "Joined": "जुड़ने की तारीख",
     "Last login": "आखिरी लॉगिन", "Entries": "एंट्री",
     "#### Manage a user": "#### यूज़र संभालें", "Select user": "यूज़र चुनें",
     "Open this user's ledger": "इस यूज़र की खाता-बही खोलें",
@@ -1327,7 +1322,6 @@ def init_users_db():
                 name TEXT NOT NULL,
                 father_name TEXT NOT NULL,
                 age INTEGER NOT NULL,
-                aadhaar TEXT UNIQUE NOT NULL,
                 pw_salt TEXT NOT NULL,
                 pw_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL,
@@ -1338,10 +1332,35 @@ def init_users_db():
             CREATE TABLE IF NOT EXISTS otp_log(phone TEXT NOT NULL, ts REAL NOT NULL);
             """
         )
+        cols = [r[1] for r in c.execute("PRAGMA table_info(users)")]
+        if "aadhaar" in cols:  # purana version: Aadhaar column hata do
+            c.executescript(
+                """
+                CREATE TABLE users_new(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone TEXT UNIQUE NOT NULL,
+                    name TEXT NOT NULL,
+                    father_name TEXT NOT NULL,
+                    age INTEGER NOT NULL,
+                    pw_salt TEXT NOT NULL,
+                    pw_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_login TEXT DEFAULT '',
+                    fails INTEGER DEFAULT 0,
+                    locked_until REAL DEFAULT 0
+                );
+                INSERT INTO users_new(id, phone, name, father_name, age, pw_salt, pw_hash,
+                                      created_at, last_login, fails, locked_until)
+                    SELECT id, phone, name, father_name, age, pw_salt, pw_hash,
+                           created_at, last_login, fails, locked_until FROM users;
+                DROP TABLE users;
+                ALTER TABLE users_new RENAME TO users;
+                """
+            )
         c.commit()
 
 
-# ---- helpers: phone, aadhaar, password
+# ---- helpers: phone, password
 def norm_phone(s):
     d = re.sub(r"\D", "", str(s or ""))
     if len(d) == 12 and d.startswith("91"):
@@ -1357,37 +1376,6 @@ def valid_phone(p):
 
 def mask_phone(p):
     return "XXXXXX" + p[-4:] if p else ""
-
-
-_VD = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
-       [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
-       [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
-       [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]]
-_VP = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
-       [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
-       [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]]
-
-
-def verhoeff_ok(num):
-    c = 0
-    for i, ch in enumerate(reversed(num)):
-        c = _VD[c][_VP[i % 8][int(ch)]]
-    return c == 0
-
-
-def norm_aadhaar(s):
-    return re.sub(r"\D", "", str(s or ""))
-
-
-def valid_aadhaar(a):
-    return bool(re.fullmatch(r"[2-9]\d{11}", a or "")) and verhoeff_ok(a)
-
-
-def fmt_aadhaar(a, reveal=False):
-    a = str(a or "")
-    if len(a) != 12:
-        return a
-    return f"{a[:4]} {a[4:8]} {a[8:]}" if reveal else f"XXXX XXXX {a[8:]}"
 
 
 def hash_pw(password, salt=None):
@@ -1497,19 +1485,14 @@ def user_exists(phone):
         return c.execute("SELECT 1 FROM users WHERE phone = ?", (phone,)).fetchone() is not None
 
 
-def aadhaar_used(a):
-    with closing(users_conn()) as c:
-        return c.execute("SELECT 1 FROM users WHERE aadhaar = ?", (a,)).fetchone() is not None
-
-
-def create_user(phone, name, father, age, aadhaar, password):
+def create_user(phone, name, father, age, password):
     salt, h = hash_pw(password)
     with closing(users_conn()) as c:
         try:
             cur = c.execute(
-                "INSERT INTO users(phone, name, father_name, age, aadhaar, pw_salt, pw_hash, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (phone, name, father, int(age), aadhaar, salt, h, date.today().isoformat()),
+                "INSERT INTO users(phone, name, father_name, age, pw_salt, pw_hash, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (phone, name, father, int(age), salt, h, date.today().isoformat()),
             )
             c.commit()
         except sqlite3.IntegrityError:
@@ -1686,18 +1669,13 @@ def register_ui():
             name = st.text_input(t("Full name"))
             father = st.text_input(t("Father's name"))
             age = st.number_input(t("Age"), min_value=18, max_value=100, value=18, step=1)
-            aad = st.text_input(t("Aadhaar number (12 digits)"), max_chars=14, placeholder="1234 5678 9012")
             ok = st.form_submit_button(t("Save and continue"), use_container_width=True, type="primary")
         if ok:
-            name, father, a = clean_name(name), clean_name(father), norm_aadhaar(aad)
+            name, father = clean_name(name), clean_name(father)
             if not valid_name(name) or not valid_name(father):
                 st.error(t("Enter a valid name and father's name."))
-            elif not valid_aadhaar(a):
-                st.error(t("Enter a valid 12-digit Aadhaar number."))
-            elif aadhaar_used(a):
-                st.error(t("This Aadhaar number is already registered."))
             else:
-                reg.update(profile={"name": name, "father": father, "age": int(age), "aadhaar": a}, step=4)
+                reg.update(profile={"name": name, "father": father, "age": int(age)}, step=4)
                 st.rerun()
 
     else:
@@ -1716,9 +1694,9 @@ def register_ui():
             elif pw != pw2:
                 st.error(t("Both passwords must be the same."))
             else:
-                row = create_user(reg["phone"], p["name"], p["father"], p["age"], p["aadhaar"], pw)
+                row = create_user(reg["phone"], p["name"], p["father"], p["age"], pw)
                 if row is None:
-                    st.error(t("This number or Aadhaar is already registered."))
+                    st.error(t("This number is already registered. Please log in."))
                 else:
                     start_session(row)
                     st.session_state["welcome"] = tf("Account created. Your username is {p}.", p=row["phone"])
@@ -1843,7 +1821,7 @@ def account_bar():
 def users_df():
     with closing(sqlite3.connect(USERS_DB)) as c:
         return pd.read_sql_query(
-            "SELECT id, phone, name, father_name, age, aadhaar, created_at, last_login "
+            "SELECT id, phone, name, father_name, age, created_at, last_login "
             "FROM users ORDER BY id DESC", c)
 
 
@@ -1920,13 +1898,11 @@ def admin_console():
     if df.empty:
         st.caption(t("No users yet."))
     else:
-        reveal = st.checkbox(t("Show full Aadhaar numbers"), key="adm_reveal")
         view = df.copy()
-        view["aadhaar"] = view["aadhaar"].map(lambda a: fmt_aadhaar(a, reveal))
         view["entries"] = [count_entries(user_db_path(i)) for i in df["id"]]
         view = view.rename(columns={
             "id": "ID", "phone": "Mobile", "name": "Name", "father_name": "Father's name", "age": "Age",
-            "aadhaar": "Aadhaar", "created_at": "Joined", "last_login": "Last login", "entries": "Entries",
+            "created_at": "Joined", "last_login": "Last login", "entries": "Entries",
         })
         show_df(view, hide_index=True, use_container_width=True)
 
