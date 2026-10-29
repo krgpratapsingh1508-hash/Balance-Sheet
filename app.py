@@ -582,6 +582,8 @@ NEW_HI = {
     "Settings": "सेटिंग्स",
     "Profile": "प्रोफ़ाइल",
     "Profile update": "प्रोफ़ाइल अपडेट",
+    "First choose the backup zip file.": "पहले बैकअप zip फ़ाइल चुनें।",
+    "Please tick the box to confirm.": "पुष्टि के लिए बॉक्स पर टिक करें।",
     "Photo": "फ़ोटो",
     "Change admin password": "एडमिन पासवर्ड बदलें",
     "Admin password updated.": "एडमिन पासवर्ड बदल गया।",
@@ -2142,16 +2144,24 @@ def admin_console():
     st.download_button("⬇️ " + t("Download full backup (zip)"), data=zip_all_data(),
                        file_name=f"all_users_backup_{date.today().isoformat()}.zip",
                        mime="application/zip", use_container_width=True)
-    with st.expander(t("Restore full backup")):
+    with st.expander(t("Restore full backup"), expanded=bool(st.session_state.get("adm_restore_open"))):
+        st.session_state["adm_restore_open"] = True  # tick / upload par expander band na ho
         up = st.file_uploader(t("Backup zip"), type=["zip"], key="adm_restore_file")
         sure = st.checkbox(t("I understand this replaces the current data of all users in the zip"), key="adm_restore_sure")
-        if st.button(t("Restore"), key="adm_restore", disabled=not (up and sure)):
-            try:
-                n = restore_all_data(up.getvalue())
-                st.session_state["admin_flash"] = "Backup restored."
-                st.rerun()
-            except Exception:
-                st.error(t("This file is not a valid backup of this app."))
+        if st.button(t("Restore"), key="adm_restore", type="primary"):
+            if up is None:
+                st.error(t("First choose the backup zip file."))
+            elif not sure:
+                st.error(t("Please tick the box to confirm."))
+            else:
+                try:
+                    restore_all_data(up.getvalue())
+                except Exception:
+                    st.error(t("This file is not a valid backup of this app."))
+                else:
+                    st.session_state["adm_restore_open"] = False
+                    st.session_state["admin_flash"] = "Backup restored."
+                    st.rerun()
 
 
 # ---------------------------------------------------------------- navigation
