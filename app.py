@@ -582,6 +582,7 @@ NEW_HI = {
     "Settings": "सेटिंग्स",
     "Profile": "प्रोफ़ाइल",
     "Profile update": "प्रोफ़ाइल अपडेट",
+    "Update profile details": "प्रोफ़ाइल की जानकारी बदलें",
     "Your current details": "आपकी मौजूदा जानकारी",
     "#### 🔒 Change password": "#### 🔒 पासवर्ड बदलें",
     "#### 👤 Update profile details": "#### 👤 प्रोफ़ाइल की जानकारी बदलें",
@@ -4454,30 +4455,7 @@ def profile_section():
         f"{t('Age')}: {prof['age']} · 📱 {escape(prof['phone'])}"
     )
 
-    # ---- change password (immediate)
-    st.markdown(t("#### 🔒 Change password"))
-    st.caption(t("Password changes take effect immediately."))
-    with st.form("pw_change_form", clear_on_submit=True):
-        cur = st.text_input(t("Current password"), type="password")
-        n1 = st.text_input(t("New password"), type="password", help=t("At least 6 characters."))
-        n2 = st.text_input(t("Confirm password"), type="password")
-        ok = st.form_submit_button(t("Change password"), type="primary", use_container_width=True)
-    if ok:
-        if not verify_user_password(uid, cur):
-            st.error(t("Current password is incorrect."))
-        elif len(n1) < MIN_PASSWORD:
-            st.error(t("Password must be at least 6 characters."))
-        elif n1 != n2:
-            st.error(t("Both passwords must be the same."))
-        elif n1 == cur:
-            st.error(t("New password must be different from the current one."))
-        else:
-            set_user_password(uid, n1)
-            st.success(t("Password updated."))
-
-    # ---- profile details (admin verification needed)
-    st.markdown(t("#### 👤 Update profile details"))
-    st.info(t("Name, father's name, age and photo changes are applied only after the admin verifies them. Until then your old details stay."))
+    # ---- pending request (status) is always visible
     req = get_profile_request(uid)
     if req is not None:
         with st.container(border=True):
@@ -4492,35 +4470,74 @@ def profile_section():
                 delete_profile_request(uid)
                 st.session_state["profile_flash"] = "Request cancelled."
                 st.rerun()
-    base = req if req is not None else prof
-    with st.form("profile_update_form"):
-        name = st.text_input(t("Full name"), value=base["name"])
-        father = st.text_input(t("Father's name"), value=base["father_name"])
-        age = st.number_input(t("Age"), min_value=18, max_value=100, value=min(max(int(base["age"]), 18), 100), step=1)
-        pic = st.file_uploader(t("Your photo (leave empty to keep the current one)"), type=["jpg", "jpeg", "png"])
-        ok = st.form_submit_button(t("Send for verification"), type="primary", use_container_width=True)
-    if ok:
-        name, father = clean_name(name), clean_name(father)
-        photo = None
-        photo_bad = False
-        if pic is not None:
-            try:
-                photo = process_photo(pic.getvalue())
-            except ValueError:
-                photo_bad = True
-        if not valid_name(name) or not valid_name(father):
-            st.error(t("Enter a valid name and father's name."))
-        elif photo_bad:
-            st.error(t("This photo could not be read. Please choose a JPG or PNG image."))
-        elif (photo is None and name == prof["name"] and father == prof["father_name"]
-              and int(age) == int(prof["age"])):
-            st.info(t("No change found. Edit a detail first."))
-        else:
-            if photo is None and req is not None:
-                photo = req["photo"]  # pehle bheji hui nayi photo na hat jaye
-            save_profile_request(uid, name, father, int(age), photo)
-            st.session_state["profile_flash"] = "Your update request has been sent to the admin. Until it is approved, your old details stay."
-            st.rerun()
+
+    # ---- two buttons: the forms open only when clicked (click again to close)
+    def _toggle(which):
+        st.session_state["profile_open"] = None if st.session_state.get("profile_open") == which else which
+
+    opened = st.session_state.get("profile_open")
+    b1, b2 = st.columns(2)
+    b1.button("🔒 " + t("Change password"), key="pf_pw_btn", on_click=_toggle, args=("pw",),
+              use_container_width=True, type="primary" if opened == "pw" else "secondary")
+    b2.button("👤 " + t("Update profile details"), key="pf_det_btn", on_click=_toggle, args=("details",),
+              use_container_width=True, type="primary" if opened == "details" else "secondary")
+
+    if opened == "pw":
+        st.markdown(t("#### 🔒 Change password"))
+        st.caption(t("Password changes take effect immediately."))
+        with st.form("pw_change_form", clear_on_submit=True):
+            cur = st.text_input(t("Current password"), type="password")
+            n1 = st.text_input(t("New password"), type="password", help=t("At least 6 characters."))
+            n2 = st.text_input(t("Confirm password"), type="password")
+            ok = st.form_submit_button(t("Change password"), type="primary", use_container_width=True)
+        if ok:
+            if not verify_user_password(uid, cur):
+                st.error(t("Current password is incorrect."))
+            elif len(n1) < MIN_PASSWORD:
+                st.error(t("Password must be at least 6 characters."))
+            elif n1 != n2:
+                st.error(t("Both passwords must be the same."))
+            elif n1 == cur:
+                st.error(t("New password must be different from the current one."))
+            else:
+                set_user_password(uid, n1)
+                st.session_state["profile_flash"] = "Password updated."
+                st.session_state["profile_open"] = None
+                st.rerun()
+
+    elif opened == "details":
+        st.markdown(t("#### 👤 Update profile details"))
+        st.info(t("Name, father's name, age and photo changes are applied only after the admin verifies them. Until then your old details stay."))
+        base = req if req is not None else prof
+        with st.form("profile_update_form"):
+            name = st.text_input(t("Full name"), value=base["name"])
+            father = st.text_input(t("Father's name"), value=base["father_name"])
+            age = st.number_input(t("Age"), min_value=18, max_value=100, value=min(max(int(base["age"]), 18), 100), step=1)
+            pic = st.file_uploader(t("Your photo (leave empty to keep the current one)"), type=["jpg", "jpeg", "png"])
+            ok = st.form_submit_button(t("Send for verification"), type="primary", use_container_width=True)
+        if ok:
+            name, father = clean_name(name), clean_name(father)
+            photo = None
+            photo_bad = False
+            if pic is not None:
+                try:
+                    photo = process_photo(pic.getvalue())
+                except ValueError:
+                    photo_bad = True
+            if not valid_name(name) or not valid_name(father):
+                st.error(t("Enter a valid name and father's name."))
+            elif photo_bad:
+                st.error(t("This photo could not be read. Please choose a JPG or PNG image."))
+            elif (photo is None and name == prof["name"] and father == prof["father_name"]
+                  and int(age) == int(prof["age"])):
+                st.info(t("No change found. Edit a detail first."))
+            else:
+                if photo is None and req is not None:
+                    photo = req["photo"]  # pehle bheji hui nayi photo na hat jaye
+                save_profile_request(uid, name, father, int(age), photo)
+                st.session_state["profile_flash"] = "Your update request has been sent to the admin. Until it is approved, your old details stay."
+                st.session_state["profile_open"] = None
+                st.rerun()
 
 
 def page_admin():
