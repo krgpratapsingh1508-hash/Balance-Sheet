@@ -582,6 +582,8 @@ NEW_HI = {
     "Settings": "सेटिंग्स",
     "Profile": "प्रोफ़ाइल",
     "Profile update": "प्रोफ़ाइल अपडेट",
+    "Change admin password": "एडमिन पासवर्ड बदलें",
+    "Admin password updated.": "एडमिन पासवर्ड बदल गया।",
     "Update profile details": "प्रोफ़ाइल की जानकारी बदलें",
     "Your current details": "आपकी मौजूदा जानकारी",
     "#### 🔒 Change password": "#### 🔒 पासवर्ड बदलें",
@@ -1349,8 +1351,8 @@ def summary_df():
 # ---------------------------------------------------------------- accounts (multi-user)
 # Har user ka apna alag database (data/user_<id>.db). Sab users ki profile data/users.db me.
 # Admin kisi bhi user ka data khol sakta hai. User sirf apna data dekhta hai.
-AUTH_MODES = ["Login", "Create account", "Forgot password"]
-AUTH_ICONS = {"Login": "🔑 ", "Create account": "🆕 ", "Forgot password": "🔁 "}
+AUTH_MODES = ["Login", "Create account"]
+AUTH_ICONS = {"Login": "🔑 ", "Create account": "🆕 "}
 
 
 def db_path():
@@ -1404,6 +1406,7 @@ def init_users_db():
             )
             """
         )
+        c.execute("CREATE TABLE IF NOT EXISTS admin_settings(key TEXT PRIMARY KEY, value TEXT)")
         cols = [r[1] for r in c.execute("PRAGMA table_info(users)")]
         if "status" not in cols:  # purane users pehle se approved maane jayenge
             c.execute("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'approved'")
@@ -1751,17 +1754,6 @@ def register_ui():
                     st.rerun()
 
 
-def forgot_ui():
-    st.markdown(t("#### 🔁 Forgot password"))
-    st.info(t("To reset your password, please contact the admin. The admin can set a new password for you."))
-    try:
-        contact = st.secrets.get("ADMIN_CONTACT")
-    except Exception:
-        contact = None
-    if contact:
-        st.success("📞 " + str(contact))
-
-
 def admin_credentials():
     try:
         u = st.secrets.get("ADMIN_USER")
@@ -1771,9 +1763,33 @@ def admin_credentials():
     return str(u or "admin"), str(p or EDIT_PASSWORD_DEFAULT), bool(p)
 
 
+def _admin_override():
+    """Admin panel se badla hua password (salt, hash). Na ho to None."""
+    with closing(users_conn()) as c:
+        rows = dict(c.execute("SELECT key, value FROM admin_settings WHERE key IN ('pw_salt','pw_hash')").fetchall())
+    return (rows["pw_salt"], rows["pw_hash"]) if "pw_salt" in rows and "pw_hash" in rows else None
+
+
+def verify_admin_password(pw):
+    ov = _admin_override()
+    if ov:
+        return check_pw(pw, ov[0], ov[1])
+    return hmac.compare_digest(pw.encode(), admin_credentials()[1].encode())
+
+
+def set_admin_password(new_pw):
+    salt, h = hash_pw(new_pw)
+    with closing(users_conn()) as c:
+        c.execute("INSERT INTO admin_settings(key, value) VALUES('pw_salt', ?) "
+                  "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (salt,))
+        c.execute("INSERT INTO admin_settings(key, value) VALUES('pw_hash', ?) "
+                  "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (h,))
+        c.commit()
+
+
 def admin_login_ui():
     user, pw, custom = admin_credentials()
-    if not custom:
+    if not custom and not _admin_override():
         st.warning(t("A default admin password is in use. Set ADMIN_PASSWORD in the app Secrets."))
     with st.form("admin_login"):
         a_user = st.text_input(t("Admin ID"))
@@ -1783,7 +1799,7 @@ def admin_login_ui():
         if time.time() < st.session_state.get("admin_lock", 0):
             st.error(t("Too many wrong attempts. Try again after 10 minutes."))
         elif (hmac.compare_digest(a_user.strip().encode(), user.encode())
-              and hmac.compare_digest(a_pw.encode(), pw.encode())):
+              and verify_admin_password(a_pw)):
             keep = st.session_state.get("lang")
             st.session_state.clear()
             if keep:
@@ -1800,7 +1816,7 @@ def admin_login_ui():
 
 
 def auth_gate():
-    """Sabse pehla page: Login / Create account / Forgot password / Admin. True = login ho chuka."""
+    """Sabse pehla page: Login / Create account / Admin. True = login ho chuka."""
     if st.session_state.get("auth"):
         return True
     _, mid, _ = st.columns([0.5, 2, 0.5])
@@ -1811,7 +1827,7 @@ def auth_gate():
             t("Account"), AUTH_MODES, horizontal=True, key="auth_mode", label_visibility="collapsed",
             format_func=lambda x: AUTH_ICONS[x] + t(x),
         )
-        {"Login": login_ui, "Create account": register_ui, "Forgot password": forgot_ui}[mode]()
+        {"Login": login_ui, "Create account": register_ui}[mode]()
     return False
 
 
@@ -2023,6 +2039,25 @@ def admin_console():
     m1, m2 = st.columns(2)
     m1.metric(t("Total users"), len(df))
     m2.metric(t("Joined today"), int((df["created_at"] == date.today().isoformat()).sum()) if not df.empty else 0)
+
+    with st.expander("🔒 " + t("Change admin password")):
+        with st.form("adm_pw_form", clear_on_submit=True):
+            cur = st.text_input(t("Current password"), type="password")
+            n1 = st.text_input(t("New password"), type="password", help=t("At least 6 characters."))
+            n2 = st.text_input(t("Confirm password"), type="password")
+            ok = st.form_submit_button(t("Change password"), type="primary", use_container_width=True)
+        if ok:
+            if not verify_admin_password(cur):
+                st.error(t("Current password is incorrect."))
+            elif len(n1) < MIN_PASSWORD:
+                st.error(t("Password must be at least 6 characters."))
+            elif n1 != n2:
+                st.error(t("Both passwords must be the same."))
+            elif n1 == cur:
+                st.error(t("New password must be different from the current one."))
+            else:
+                set_admin_password(n1)
+                st.success(t("Admin password updated."))
 
     admin_pending_section()
     admin_profile_requests_section()
@@ -4058,40 +4093,6 @@ def backup_section():
 
 
 # ---------------------------------------------------------------- edit records
-def edit_password():
-    try:
-        pw = st.secrets.get("EDIT_PASSWORD")
-    except Exception:
-        pw = None
-    return str(pw or EDIT_PASSWORD_DEFAULT)
-
-
-def edit_gate():
-    """Apne purane records badalne se pehle user apna account password dalta hai (admin ko seedha access)."""
-    a = st.session_state.get("auth", {})
-    if a.get("role") == "admin" or st.session_state.get("edit_ok"):
-        return True
-    _, mid, _ = st.columns([1, 1.2, 1])
-    with mid:
-        st.info(t("Editing old records is protected. Enter your account password to continue."))
-        with st.form("edit_login"):
-            entered = st.text_input(t("Account password"), type="password")
-            ok = st.form_submit_button(t("Unlock editing"), use_container_width=True, type="primary")
-        if ok:
-            if verify_user_password(a.get("uid", 0), entered):
-                st.session_state["edit_ok"] = True
-                st.rerun()
-            else:
-                st.error(t("Incorrect password."))
-    return False
-
-
-def lock_edit():
-    """Lock the admin panel and go back to the dashboard."""
-    st.session_state["edit_ok"] = False
-    st.session_state["page"] = P_DASH
-
-
 def cleanup_parties():
     """Remove parties that no longer have any entries."""
     run("DELETE FROM parties WHERE id NOT IN (SELECT DISTINCT party_id FROM txns)")
@@ -4554,11 +4555,6 @@ def page_admin():
     if section == "Profile":
         profile_section()  # password badalne ke liye alag se lock nahi
         return
-    if not edit_gate():
-        return
-    c1, c2 = st.columns([5, 1])
-    c1.caption(t("Admin panel is unlocked for this session."))
-    c2.button(t("Lock"), on_click=lock_edit, use_container_width=True)
     flash = st.session_state.pop("flash", None)
     if flash:
         st.success(t(flash))
