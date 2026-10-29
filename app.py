@@ -2065,8 +2065,9 @@ def admin_console():
     if df.empty:
         st.caption(t("No users yet."))
     else:
-        view = df.copy()
-        view["entries"] = [count_entries(user_db_path(i)) for i in df["id"]]
+        view = df.sort_values("id").reset_index(drop=True)  # purana user upar
+        view["entries"] = [count_entries(user_db_path(i)) for i in view["id"]]
+        view["id"] = range(1, len(view) + 1)  # dikhane ke liye 1 se serial number (asli id andar alag rehti hai)
         view = view.rename(columns={
             "id": "ID", "phone": "Mobile", "name": "Name", "father_name": "Father's name", "age": "Age",
             "status": "Status", "created_at": "Joined", "last_login": "Last login", "entries": "Entries",
