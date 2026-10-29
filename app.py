@@ -582,6 +582,7 @@ NEW_HI = {
     "Settings": "सेटिंग्स",
     "Profile": "प्रोफ़ाइल",
     "Profile update": "प्रोफ़ाइल अपडेट",
+    "Photo": "फ़ोटो",
     "Change admin password": "एडमिन पासवर्ड बदलें",
     "Admin password updated.": "एडमिन पासवर्ड बदल गया।",
     "Update profile details": "प्रोफ़ाइल की जानकारी बदलें",
@@ -2067,12 +2068,18 @@ def admin_console():
     else:
         view = df.sort_values("id").reset_index(drop=True)  # purana user upar
         view["entries"] = [count_entries(user_db_path(i)) for i in view["id"]]
+        photos = []
+        for i in view["id"]:
+            ph = user_photo(i)
+            photos.append("data:image/jpeg;base64," + base64.b64encode(bytes(ph)).decode() if ph else None)
+        view.insert(1, "photo", photos)
         view["id"] = range(1, len(view) + 1)  # dikhane ke liye 1 se serial number (asli id andar alag rehti hai)
         view = view.rename(columns={
-            "id": "ID", "phone": "Mobile", "name": "Name", "father_name": "Father's name", "age": "Age",
+            "id": "ID", "photo": "Photo", "phone": "Mobile", "name": "Name", "father_name": "Father's name", "age": "Age",
             "status": "Status", "created_at": "Joined", "last_login": "Last login", "entries": "Entries",
         })
-        show_df(view, hide_index=True, use_container_width=True)
+        show_df(view, hide_index=True, use_container_width=True,
+                column_config={"Photo": st.column_config.ImageColumn("Photo", width="small")})
 
         st.markdown(t("#### Manage a user"))
         ids = [int(i) for i in df["id"]]
