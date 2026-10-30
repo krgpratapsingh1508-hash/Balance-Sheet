@@ -927,6 +927,21 @@ h1, h2, h3, h4 {
 .dhead .t { font-size:.78rem; font-weight:600; color:#6b7885; }
 .dhead .t b.pos { color:#1e7a4f; } .dhead .t b.neg { color:#b4372f; }
 .dhead + .lst { margin-top:0; }
+/* Transactions table */
+.tbw { overflow-x:auto; border:1px solid #d6e0e6; border-radius:12px; background:#fff; box-shadow:0 2px 10px rgba(15,61,76,.06); margin:6px 0 10px; }
+table.tb { width:100%; border-collapse:collapse; font-size:.9rem; min-width:640px; }
+table.tb th { background:#0f3d4c; color:#fff; font-weight:600; padding:11px 12px; text-align:left; white-space:nowrap; position:sticky; top:0; border-right:1px solid rgba(255,255,255,.15); }
+table.tb th:last-child { border-right:none; }
+table.tb td { padding:9px 12px; border-top:1px solid #e3eaee; border-right:1px solid #eef2f5; color:#14202b; vertical-align:middle; }
+table.tb td:last-child { border-right:none; }
+table.tb tbody tr:nth-child(even) td { background:#f2f7f9; }
+table.tb tbody tr:hover td { background:#e3eef3; }
+table.tb .c { text-align:center; white-space:nowrap; } table.tb .r { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; font-weight:600; }
+table.tb .pos { color:#1e7a4f; } table.tb .neg { color:#b4372f; }
+table.tb td.nt { color:#5b6975; max-width:260px; word-break:break-word; }
+table.tb tfoot td:first-child { text-align:left; }
+table.tb .tp { white-space:nowrap; } table.tb .tp .chip { margin-left:6px; font-size:.68rem; padding:0 8px !important; }
+table.tb tfoot td { background:#eaf2f5 !important; border-top:2px solid #0f3d4c; font-weight:700; color:#0f3d4c; }
 .lst-more { text-align:center; color:#6b7885; font-size:.82rem; margin:2px 0 6px; }
 @media (max-width:640px) { .li { padding:10px 10px; gap:10px; } .li .ico { width:36px; height:36px; font-size:1.05rem; } .li .rt { max-width:50%; } }
 
@@ -2626,6 +2641,32 @@ def show_list(key, items, step=12, search=False):
     elif search or len(items) > step:
         st.markdown(f'<div class="lst-more">{escape(tf("Showing {n} of {m}", n=len(items), m=len(items)))}</div>',
                     unsafe_allow_html=True)
+
+
+def table_html(heads, rows, foot=None):
+    """Sundar table. heads = [(label, css_class)], rows = [[cell_html, ...]] (cell_html pehle se escape ho)."""
+    th = "".join(f'<th class="{c}">{escape(h)}</th>' for h, c in heads)
+    body = "".join(
+        "<tr>" + "".join(f'<td class="{heads[i][1]}">{v}</td>' for i, v in enumerate(r)) + "</tr>" for r in rows
+    )
+    tf_ = ""
+    if foot:
+        tf_ = "<tfoot><tr>" + "".join(f'<td class="{heads[i][1]}">{v}</td>' for i, v in enumerate(foot)) + "</tr></tfoot>"
+    return f'<div class="tbw"><table class="tb"><thead><tr>{th}</tr></thead><tbody>{body}</tbody>{tf_}</table></div>'
+
+
+def show_table(key, heads, rows, foot=None, step=25):
+    """Table + 'Show more'. Footer (total) hamesha poori filtered list ka hota hai."""
+    if not rows:
+        return
+    nk = f"{key}_n"
+    n = st.session_state.get(nk, step)
+    st.markdown(table_html(heads, rows[:n], foot), unsafe_allow_html=True)
+    st.markdown(f'<div class="lst-more">{escape(tf("Showing {n} of {m}", n=min(n, len(rows)), m=len(rows)))}</div>',
+                unsafe_allow_html=True)
+    if len(rows) > n:
+        st.button(t("Show more"), key=f"{key}_more", use_container_width=True,
+                  on_click=lambda: st.session_state.__setitem__(nk, n + step))
 
 
 def show_grouped_list(key, items, step=15):
@@ -4850,7 +4891,8 @@ def admin_transactions():
     k2.markdown(kpi("Money out", inr(money_out), tf("{n} entries", n=int((df['Direction'] == 'Out').sum())), "r"), unsafe_allow_html=True)
     k3.markdown(kpi("Net", inr(money_in - money_out), "in − out", "g" if money_in >= money_out else "r"), unsafe_allow_html=True)
     st.write("")
-    items = []
+    gcls = {"Income": "g", "Expenses": "r", "Loan payments": "y"}
+    rows_ = []
     for r_ in df.itertuples(index=False):
         if r_.Group == "Income":
             icon = "💰"
@@ -4861,18 +4903,21 @@ def admin_transactions():
         else:
             icon = KIND_ICONS.get(r_.Type, "•")
         inn = r_.Direction == "In"
-        bits = [t(r_.Type)]
-        if r_.Mode:
-            bits.append(t(r_.Mode))
-        if r_.Note:
-            bits.append(str(r_.Note))
-        items.append({
-            "date": str(r_.Date)[:10], "signed": float(r_.Amount) if inn else -float(r_.Amount),
-            "icon": icon, "tone": "g" if inn else "r", "title": r_[3] or t(r_.Type), "sub": " · ".join(bits),
-            "amt": ("+" if inn else "−") + inr(r_.Amount), "amt_cls": "pos" if inn else "neg",
-            "chip": t(r_.Group), "chip_cls": {"Income": "g", "Expenses": "r", "Loan payments": "y"}.get(r_.Group, "z"),
-        })
-    show_grouped_list("all_txn", items, step=15)
+        amt = inr(r_.Amount)
+        rows_.append([
+            escape(str(r_.Date)[:10]),
+            f"<b>{escape(str(r_[3] or t(r_.Type)))}</b>",
+            f'{icon} {escape(t(r_.Type))}<span class="chip {gcls.get(r_.Group, "z")}">{escape(t(r_.Group))}</span>',
+            escape(t(r_.Mode)) if r_.Mode else "—",
+            f'<span class="pos">+{amt}</span>' if inn else "",
+            "" if inn else f'<span class="neg">−{amt}</span>',
+            escape(str(r_.Note)) if r_.Note else "",
+        ])
+    heads = [(t("Date"), "c"), (t("Party / loan"), ""), (t("Type"), "tp"), (t("Mode"), "c"),
+             (t("In") + " (₹)", "r"), (t("Out") + " (₹)", "r"), (t("Note"), "nt")]
+    foot = [escape(t("Total")) + f" ({len(rows_)})", "", "", "",
+            f'<span class="pos">+{inr(money_in)}</span>', f'<span class="neg">−{inr(money_out)}</span>', ""]
+    show_table("all_txn_tbl", heads, rows_, foot=foot)
     st.caption(t("To correct or delete an entry, open 'Edit records' above."))
 
 
