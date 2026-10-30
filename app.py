@@ -10,7 +10,6 @@ import json
 import re
 import hmac
 import secrets
-import shutil
 import sqlite3
 import time
 import urllib.parse
@@ -748,13 +747,6 @@ NEW_HI = {
     "This permanently deletes the user and all of their data.": "इससे यूज़र और उसका सारा डेटा हमेशा के लिए हट जाएगा।",
     "Type the mobile number {p} to confirm": "पुष्टि के लिए मोबाइल नंबर {p} लिखें",
     "Delete user": "यूज़र हटाएँ", "User deleted.": "यूज़र हटा दिया गया।",
-    "Old data (from before accounts)": "पुराना डेटा (खाते बनने से पहले का)",
-    "{n} entries in the old single-user file.": "पुरानी फ़ाइल में {n} एंट्री हैं।",
-    "Open old data": "पुराना डेटा खोलें", "Old data": "पुराना डेटा",
-    "Copy the old data to the selected user (replaces that user's current data)":
-        "पुराना डेटा चुने हुए यूज़र को दें (उसका मौजूदा डेटा बदल जाएगा)",
-    "Give old data to selected user": "पुराना डेटा चुने हुए यूज़र को दें",
-    "Old data copied.": "पुराना डेटा कॉपी हो गया।",
     "#### Backup & restore of everything": "#### सबका बैकअप और रिस्टोर",
     "Download full backup (zip)": "पूरा बैकअप डाउनलोड करें (zip)",
     "Restore full backup": "पूरा बैकअप रिस्टोर करें", "Backup zip": "बैकअप zip",
@@ -2312,19 +2304,6 @@ def admin_console():
                 user_db_path(uid).unlink(missing_ok=True)
                 st.session_state["admin_flash"] = "User deleted."
                 st.rerun()
-
-        if LEGACY_DB.exists():
-            with st.expander(t("Old data (from before accounts)")):
-                st.caption(tf("{n} entries in the old single-user file.", n=count_entries(LEGACY_DB)))
-                if st.button(t("Open old data"), key="adm_open_legacy"):
-                    open_ledger(LEGACY_DB, t("Old data"))
-                    st.rerun()
-                sure = st.checkbox(t("Copy the old data to the selected user (replaces that user's current data)"),
-                                   key="adm_legacy_sure")
-                if st.button(t("Give old data to selected user"), key="adm_legacy_give", disabled=not sure):
-                    shutil.copyfile(LEGACY_DB, user_db_path(uid))
-                    st.session_state["admin_flash"] = "Old data copied."
-                    st.rerun()
 
     st.markdown(t("#### Backup & restore of everything"))
     st.download_button("⬇️ " + t("Download full backup (zip)"), data=zip_all_data(),
