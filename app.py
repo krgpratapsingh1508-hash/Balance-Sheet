@@ -74,8 +74,10 @@ P_EDIT = "Settings"
 P_SAVE = "My Savings"
 PAGES = [P_DASH, P_SAVE, P_NEW, P_EDIT]  # Admin panel is always last
 
-# Password needed to edit or delete old records. Override with EDIT_PASSWORD in Streamlit secrets.
-EDIT_PASSWORD_DEFAULT = "0610"
+# Admin ka default password code me nahi likha, sirf uska salted hash (PBKDF2) hai. Asli password badalne ke liye
+# Streamlit Secrets me ADMIN_PASSWORD set karo, ya Admin panel me 'Change admin password' use karo.
+ADMIN_DEFAULT_SALT = "d7dde14b06088e1366d137f0dd77b5b4"
+ADMIN_DEFAULT_HASH = "1ca0cd01dff4d5af160398b9589f11e054d8d1c34b48ee9385a0aa0444eb7888"
 
 # ---------------------------------------------------------------- language (English / Hindi)
 LANGS = {"en": "English", "hi": "हिन्दी"}
@@ -1918,7 +1920,7 @@ def admin_credentials():
         p = st.secrets.get("ADMIN_PASSWORD") or st.secrets.get("EDIT_PASSWORD")
     except Exception:
         u = p = None
-    return str(u or "admin"), str(p or EDIT_PASSWORD_DEFAULT), bool(p)
+    return str(u or "admin"), (str(p) if p else None), bool(p)
 
 
 def _admin_override():
@@ -1932,7 +1934,10 @@ def verify_admin_password(pw):
     ov = _admin_override()
     if ov:
         return check_pw(pw, ov[0], ov[1])
-    return hmac.compare_digest(pw.encode(), admin_credentials()[1].encode())
+    secret_pw = admin_credentials()[1]
+    if secret_pw:  # Streamlit Secrets me ADMIN_PASSWORD diya ho to wahi chalega
+        return hmac.compare_digest(pw.encode(), secret_pw.encode())
+    return check_pw(pw, ADMIN_DEFAULT_SALT, ADMIN_DEFAULT_HASH)
 
 
 def set_admin_password(new_pw):
