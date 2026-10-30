@@ -716,6 +716,9 @@ NEW_HI = {
     "#### All users": "#### सभी यूज़र", "No users yet.": "अभी कोई यूज़र नहीं है।",
     "ID": "आईडी", "Mobile": "मोबाइल", "Joined": "जुड़ने की तारीख",
     "Last login": "आखिरी लॉगिन", "Entries": "एंट्री",
+    "{s} of {l}": "{l} में से {s}",
+    "Limit crossed": "सीमा पार",
+    "Within limit": "सीमा में",
     "Search": "खोजें",
     "Show more": "और दिखाएँ",
     "No matching entries.": "कोई मिलती-जुलती एंट्री नहीं मिली।",
@@ -911,6 +914,12 @@ h1, h2, h3, h4 {
 .chip.y { background:#fdf1d6; color:#8a6100; }
 .li .bar { height:5px; border-radius:99px; background:#e7ebee; margin-top:7px; overflow:hidden; }
 .li .bar > i { display:block; height:100%; border-radius:99px; background:#2a8196; }
+.li .bar.over > i { background:#b4372f; }
+.li .bar > i.c { background:var(--bc); }
+.pcard-top .avatar { width:48px; height:48px; border-radius:50%; font-size:1.2rem; box-shadow:0 2px 8px rgba(15,61,76,.25); }
+.pcard-top .pname { font-size:1.06rem; font-weight:700; color:#0f3d4c; }
+.pamt { font-size:1.7rem !important; }
+.chip { border-radius:999px !important; padding:2px 12px !important; }
 .lst-more { text-align:center; color:#6b7885; font-size:.82rem; margin:2px 0 6px; }
 @media (max-width:640px) { .li { padding:10px 10px; gap:10px; } .li .ico { width:36px; height:36px; font-size:1.05rem; } .li .rt { max-width:50%; } }
 
@@ -2551,7 +2560,8 @@ def followup_section():
         with st.expander(tf("Marked as 'will never pay' ({n})", n=len(never))):
             for a in never:
                 x, y = st.columns([3, 1])
-                x.write(f"{a['name']}: {inr(a['amt'])}")
+                x.markdown(list_html([{"icon": "🚫", "tone": "r", "title": a["name"], "amt": inr(a["amt"]),
+                                       "amt_cls": "neg"}]), unsafe_allow_html=True)
                 y.button(t("Ask again"), key=f"fu_again_{a['id']}", on_click=clear_followup, args=(a["id"],))
     if alerts or never:
         st.write("")
@@ -2571,7 +2581,9 @@ def list_html(items):
     for it in items:
         bar = ""
         if it.get("bar") is not None:
-            bar = f'<div class="bar"><i style="width:{min(max(it["bar"], 0.0), 1.0) * 100:.1f}%"></i></div>'
+            w = min(max(float(it["bar"]), 0.0), 1.0) * 100
+            bg = f"background:{it['bar_color']};" if it.get("bar_color") else ""
+            bar = f'<div class="bar {it.get("bar_cls", "")}"><i style="width:{w:.1f}%;{bg}"></i></div>'
         chip = (f'<div><span class="chip {it.get("chip_cls", "z")}">{escape(str(it["chip"]))}</span></div>'
                 if it.get("chip") else "")
         amt = (f'<div class="amt {it.get("amt_cls", "")}">{escape(str(it["amt"]))}</div>'
@@ -3493,13 +3505,14 @@ def page_savings():
             f'<div style="display:flex;height:26px;border-radius:4px;overflow:hidden;background:#e7ebee">{bar}</div>',
             unsafe_allow_html=True,
         )
-        legend = "".join(
-            f'<div class="act"><div class="l"><span style="display:inline-block;width:12px;height:12px;'
-            f'background:{col};border-radius:2px;margin-right:8px"></span>{t(name)}</div>'
-            f'<div class="a">{tf("₹{v} out of every ₹100", v=f"{pct:.0f}")}</div></div>'
-            for name, pct, col in parts
-        )
-        st.markdown(legend, unsafe_allow_html=True)
+        part_icons = {"Spent on expenses": ("🛒", "r"), "Loan instalments / penalty": ("🏦", "y"),
+                      "Lent to others": ("🤝", "b"), "Saved (kept)": ("💰", "g")}
+        legend = [{
+            "icon": part_icons.get(name, ("•", "z"))[0], "tone": part_icons.get(name, ("•", "z"))[1],
+            "title": t(name), "sub": tf("₹{v} out of every ₹100", v=f"{pct:.0f}"),
+            "amt": f"{pct:.0f}%", "bar": min(pct / 100, 1.0), "bar_color": col,
+        } for name, pct, col in parts]
+        st.markdown(list_html(legend), unsafe_allow_html=True)
         if used > 100:
             st.error(t("You have spent more than you earned this month."))
     else:
@@ -3553,13 +3566,19 @@ def page_savings():
     cats = [c for c in EXPENSE_CATS if c != "Cash"]
     limits = {c: float(get_setting(f"limit_{c}", "0") or 0) for c in cats}
     spent_by = exm.groupby("category")["amount"].sum().to_dict() if not exm.empty else {}
+    lim_items = []
     for c in cats:
         lim, sp = limits[c], float(spent_by.get(c, 0.0))
         if lim > 0:
-            if sp > lim:
-                st.error(tf("Limit crossed: {c} spent {s} of {l}", c=t(c), s=inr(sp), l=inr(lim)))
-            else:
-                st.progress(min(sp / lim, 1.0), text=tf("{c}: {s} of {l}", c=t(c), s=inr(sp), l=inr(lim)))
+            over = sp > lim
+            lim_items.append({
+                "icon": CAT_ICONS.get(c, "🧾"), "tone": "r" if over else "g", "title": t(c),
+                "sub": tf("{s} of {l}", s=inr(sp), l=inr(lim)), "amt": f"{sp / lim * 100:.0f}%",
+                "amt_cls": "neg" if over else "pos", "chip": t("Limit crossed") if over else t("Within limit"),
+                "chip_cls": "r" if over else "g", "bar": min(sp / lim, 1.0), "bar_cls": "over" if over else "",
+            })
+    if lim_items:
+        st.markdown(list_html(lim_items), unsafe_allow_html=True)
     with st.expander(t("Monthly limit for a category")):
         st.caption(t("Set a monthly limit per category (0 = no limit). You will see a warning when you cross it."))
         with st.form("limit_form"):
@@ -4700,10 +4719,28 @@ def admin_transactions():
     k2.markdown(kpi("Money out", inr(money_out), tf("{n} entries", n=int((df['Direction'] == 'Out').sum())), "r"), unsafe_allow_html=True)
     k3.markdown(kpi("Net", inr(money_in - money_out), "in − out", "g" if money_in >= money_out else "r"), unsafe_allow_html=True)
     st.write("")
-    show_df(
-        df.drop(columns=["Group"]), hide_index=True, use_container_width=True,
-        column_config={"Amount": st.column_config.NumberColumn(format="₹%.2f")},
-    )
+    items = []
+    for r_ in df.itertuples(index=False):
+        if r_.Group == "Income":
+            icon = "💰"
+        elif r_.Group == "Expenses":
+            icon = CAT_ICONS.get(r_.Type, "🧾")
+        elif r_.Group == "Loan payments":
+            icon = "🏦" if r_.Type == "Instalment" else "⚠️"
+        else:
+            icon = KIND_ICONS.get(r_.Type, "•")
+        inn = r_.Direction == "In"
+        bits = [t(r_.Type), str(r_.Date)]
+        if r_.Mode:
+            bits.append(t(r_.Mode))
+        if r_.Note:
+            bits.append(str(r_.Note))
+        items.append({
+            "icon": icon, "tone": "g" if inn else "r", "title": r_[3] or t(r_.Type), "sub": " · ".join(bits),
+            "amt": ("+" if inn else "−") + inr(r_.Amount), "amt_cls": "pos" if inn else "neg",
+            "chip": t(r_.Group), "chip_cls": {"Income": "g", "Expenses": "r", "Loan payments": "y"}.get(r_.Group, "z"),
+        })
+    show_list("all_txn", items, step=15)
     st.caption(t("To correct or delete an entry, open 'Edit records' above."))
 
 
