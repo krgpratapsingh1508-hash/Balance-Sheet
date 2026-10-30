@@ -747,6 +747,13 @@ NEW_HI = {
     "This permanently deletes the user and all of their data.": "इससे यूज़र और उसका सारा डेटा हमेशा के लिए हट जाएगा।",
     "Type the mobile number {p} to confirm": "पुष्टि के लिए मोबाइल नंबर {p} लिखें",
     "Delete user": "यूज़र हटाएँ", "User deleted.": "यूज़र हटा दिया गया।",
+    "Selected user": "चुना हुआ यूज़र",
+    "All users ({n})": "सभी यूज़र ({n})",
+    "This permanently deletes ALL {n} users and all of their data. The admin password is not affected.": "यह सभी {n} यूज़र और उनका पूरा डेटा हमेशा के लिए हटा देगा। एडमिन पासवर्ड पर असर नहीं पड़ेगा।",
+    "Tip: download a full backup first (see below).": "सुझाव: पहले नीचे से पूरा बैकअप डाउनलोड कर लें।",
+    "Type DELETE ALL to confirm": "पुष्टि के लिए DELETE ALL लिखें",
+    "Delete all users": "सभी यूज़र हटाएँ",
+    "All users deleted.": "सभी यूज़र हटा दिए गए।",
     "#### Backup & restore of everything": "#### सबका बैकअप और रिस्टोर",
     "Download full backup (zip)": "पूरा बैकअप डाउनलोड करें (zip)",
     "Restore full backup": "पूरा बैकअप रिस्टोर करें", "Backup zip": "बैकअप zip",
@@ -2293,17 +2300,42 @@ def admin_console():
                     set_user_password(uid, npw)
                     st.success(t("Password changed."))
         with st.expander(t("Delete this user")):
-            st.error(t("This permanently deletes the user and all of their data."))
-            row = df[df["id"] == uid].iloc[0]
-            word = st.text_input(tf("Type the mobile number {p} to confirm", p=row["phone"]), key="adm_del_word")
-            if st.button(t("Delete user"), key="adm_del", disabled=norm_phone(word) != row["phone"]):
-                with closing(users_conn()) as c:
-                    c.execute("DELETE FROM users WHERE id = ?", (int(uid),))
-                    c.execute("DELETE FROM profile_requests WHERE user_id = ?", (int(uid),))
-                    c.commit()
-                user_db_path(uid).unlink(missing_ok=True)
-                st.session_state["admin_flash"] = "User deleted."
-                st.rerun()
+            scope = st.radio(t("Delete"), ["one", "all"], horizontal=True, key="adm_del_scope",
+                             format_func=lambda o: t("Selected user") if o == "one" else tf("All users ({n})", n=len(df)))
+            if scope == "one":
+                st.error(t("This permanently deletes the user and all of their data."))
+                row = df[df["id"] == uid].iloc[0]
+                word = st.text_input(tf("Type the mobile number {p} to confirm", p=row["phone"]), key="adm_del_word")
+                if st.button(t("Delete user"), key="adm_del", disabled=norm_phone(word) != row["phone"]):
+                    with closing(users_conn()) as c:
+                        c.execute("DELETE FROM users WHERE id = ?", (int(uid),))
+                        c.execute("DELETE FROM profile_requests WHERE user_id = ?", (int(uid),))
+                        c.commit()
+                    user_db_path(uid).unlink(missing_ok=True)
+                    st.session_state["admin_flash"] = "User deleted."
+                    st.rerun()
+            else:
+                st.error(tf("This permanently deletes ALL {n} users and all of their data. The admin password is not affected.",
+                            n=len(df)))
+                st.caption(t("Tip: download a full backup first (see below)."))
+                word_all = st.text_input(t("Type DELETE ALL to confirm"), key="adm_del_all_word")
+                if st.button(t("Delete all users"), key="adm_del_all", type="primary",
+                             disabled=word_all.strip().upper() != "DELETE ALL"):
+                    with closing(users_conn()) as c:
+                        c.execute("DELETE FROM users")
+                        c.execute("DELETE FROM profile_requests")
+                        try:  # nayi id 1 se shuru ho
+                            c.execute("DELETE FROM sqlite_sequence WHERE name IN ('users')")
+                        except sqlite3.Error:
+                            pass
+                        c.commit()
+                    for f in DATA_DIR.glob("user_*.db*"):  # har user ka database (aur uski journal files)
+                        f.unlink(missing_ok=True)
+                    close_ledger()
+                    for k in ("adm_user", "adm_del_all_word", "adm_del_word"):
+                        st.session_state.pop(k, None)
+                    st.session_state["admin_flash"] = "All users deleted."
+                    st.rerun()
 
     st.markdown(t("#### Backup & restore of everything"))
     st.download_button("⬇️ " + t("Download full backup (zip)"), data=zip_all_data(),
