@@ -3780,6 +3780,86 @@ def from_master(m):
     return out, unknown
 
 
+XL_NAVY, XL_BAND, XL_LINE, XL_INK = "0F3D4C", "EAF2F5", "C9D6DD", "14202B"
+
+
+def xl_style_table(ws, widths=None, style_rows=0, wrap_cols=("note",)):
+    """Excel sheet ko sundar table banata hai. Sirf look badalta hai: header row 1 me hi rehti hai, data wahi rehta hai,
+    isliye backup restore pehle jaisa hi chalta hai."""
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    ncol = ws.max_column
+    last = max(ws.max_row, 1 + style_rows)
+    line = Side(style="thin", color=XL_LINE)
+    box = Border(left=line, right=line, top=line, bottom=line)
+    head_fill = PatternFill("solid", fgColor=XL_NAVY)
+    band = PatternFill("solid", fgColor=XL_BAND)
+    names = [str(ws.cell(row=1, column=c).value or "").strip().lower() for c in range(1, ncol + 1)]
+
+    # column widths
+    for c in range(1, ncol + 1):
+        if widths and c <= len(widths):
+            w = widths[c - 1]
+        else:
+            vals = [len(str(ws.cell(row=r, column=c).value or "")) for r in range(1, min(ws.max_row, 200) + 1)]
+            w = min(max(max(vals, default=8) + 4, 12), 45)
+        ws.column_dimensions[get_column_letter(c)].width = max(w, len(names[c - 1]) + 4)
+
+    # header
+    ws.row_dimensions[1].height = 28
+    for c in range(1, ncol + 1):
+        cell = ws.cell(row=1, column=c)
+        cell.fill, cell.border = head_fill, box
+        cell.font = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    # body: zebra rows, thin borders, right-aligned money, centred dates and phones
+    for r in range(2, last + 1):
+        zebra = band if r % 2 == 1 else None
+        for c in range(1, ncol + 1):
+            cell = ws.cell(row=r, column=c)
+            nm = names[c - 1]
+            cell.border = box
+            cell.font = Font(name="Calibri", size=11, color=XL_INK)
+            if zebra:
+                cell.fill = zebra
+            money = nm.endswith("amount") or nm in ("in", "out", "left", "net", "balance")
+            if money:
+                if isinstance(cell.value, (int, float)) and cell.number_format == "General":
+                    cell.number_format = "#,##0.00"
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            elif nm in ("date", "due_date", "first_due", "cash_date", "promise_date", "set_on", "phone", "mode",
+                        "type", "kind", "total_kists", "penalty_type", "followup_mode"):
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=nm in wrap_cols)
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(ncol)}{max(ws.max_row, 2)}"
+    ws.sheet_view.showGridLines = False
+    ws.sheet_properties.tabColor = XL_NAVY
+
+
+def xl_style_notes(ws, width=110):
+    """Instructions sheet: heading lines band me, baaki normal."""
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    band = PatternFill("solid", fgColor=XL_BAND)
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=1):
+        cell = row[0]
+        txt = str(cell.value or "")
+        if cell.font is not None and cell.font.bold and txt:
+            cell.fill = band
+            cell.font = Font(name="Calibri", bold=True, size=13, color=XL_NAVY)
+            ws.row_dimensions[cell.row].height = 24
+        else:
+            cell.font = Font(name="Consolas" if "->" in txt else "Calibri", size=11, color=XL_INK)
+        cell.alignment = Alignment(vertical="center", wrap_text=True, indent=0 if cell.fill == band else 1)
+    ws.column_dimensions["A"].width = width
+    ws.sheet_view.showGridLines = False
+    ws.sheet_properties.tabColor = "2A8196"
+
+
 def master_template_xlsx():
     """Ek hi sheet ('Master') wala khali restore format + Instructions + Examples (examples restore nahi hote)."""
     from openpyxl import Workbook
@@ -3810,6 +3890,7 @@ def master_template_xlsx():
         i = MASTER_COLS.index(col) + 1
         for r in range(2, 3002):
             ws.cell(row=r, column=i).number_format = "@"
+    xl_style_table(ws, widths=[widths[c] + 4 for c in MASTER_COLS], style_rows=60)
 
     def dropdown(options, col, strict=True):
         letter = ws.cell(row=1, column=MASTER_COLS.index(col) + 1).column_letter
@@ -3846,6 +3927,7 @@ def master_template_xlsx():
     ]
     for smp in samples:
         ex.append([smp.get(c, "") for c in MASTER_COLS])
+    xl_style_table(ex, widths=[widths[c] + 4 for c in MASTER_COLS])
 
     ins = wb.create_sheet("Instructions")
     lines = [
@@ -3876,7 +3958,7 @@ def master_template_xlsx():
     for text, bold in lines:
         ins.append([text])
         ins.cell(row=ins.max_row, column=1).font = Font(bold=bold, size=12 if bold else 11, name="Consolas" if "->" in text else "Calibri")
-    ins.column_dimensions["A"].width = 120
+    xl_style_notes(ins, width=120)
 
     buf = BytesIO()
     wb.save(buf)
@@ -3890,10 +3972,7 @@ def to_xlsx_multi(sheets):
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         for name, df in sheets.items():
             df.to_excel(w, index=False, sheet_name=name)
-            ws = w.sheets[name]
-            for i, col in enumerate(df.columns, start=1):
-                width = max([len(str(col))] + [len(str(v)) for v in df[col].head(200)]) + 2
-                ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = min(width, 45)
+            xl_style_table(w.sheets[name])
     return buf.getvalue()
 
 
@@ -3946,6 +4025,7 @@ def template_xlsx():
             if dc in cols:
                 for r in range(2, 1002):
                     ws.cell(row=r, column=cols.index(dc) + 1).number_format = "@"
+        xl_style_table(ws, widths=[w + 2 for w in widths], style_rows=50)
 
     def dropdown(ws, options, rng, strict=True):
         dv = DataValidation(type="list", formula1='"' + ",".join(options) + '"',
@@ -4037,7 +4117,7 @@ def template_xlsx():
     for text, bold in lines:
         ws5.append([text])
         ws5.cell(row=ws5.max_row, column=1).font = Font(bold=bold, size=12 if bold else 11)
-    ws5.column_dimensions["A"].width = 95
+    xl_style_notes(ws5, width=100)
 
     buf = BytesIO()
     wb.save(buf)
