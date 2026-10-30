@@ -716,6 +716,8 @@ NEW_HI = {
     "#### All users": "#### सभी यूज़र", "No users yet.": "अभी कोई यूज़र नहीं है।",
     "ID": "आईडी", "Mobile": "मोबाइल", "Joined": "जुड़ने की तारीख",
     "Last login": "आखिरी लॉगिन", "Entries": "एंट्री",
+    "Today": "आज",
+    "Yesterday": "कल",
     "{s} of {l}": "{l} में से {s}",
     "Limit crossed": "सीमा पार",
     "Within limit": "सीमा में",
@@ -920,6 +922,11 @@ h1, h2, h3, h4 {
 .pcard-top .pname { font-size:1.06rem; font-weight:700; color:#0f3d4c; }
 .pamt { font-size:1.7rem !important; }
 .chip { border-radius:999px !important; padding:2px 12px !important; }
+.dhead { display:flex; justify-content:space-between; align-items:center; gap:8px; margin:16px 4px 6px; flex-wrap:wrap; }
+.dhead .d { font-weight:700; color:#0f3d4c; font-size:.98rem; font-family:'Source Serif 4',Georgia,serif; }
+.dhead .t { font-size:.78rem; font-weight:600; color:#6b7885; }
+.dhead .t b.pos { color:#1e7a4f; } .dhead .t b.neg { color:#b4372f; }
+.dhead + .lst { margin-top:0; }
 .lst-more { text-align:center; color:#6b7885; font-size:.82rem; margin:2px 0 6px; }
 @media (max-width:640px) { .li { padding:10px 10px; gap:10px; } .li .ico { width:36px; height:36px; font-size:1.05rem; } .li .rt { max-width:50%; } }
 
@@ -2619,6 +2626,50 @@ def show_list(key, items, step=12, search=False):
     elif search or len(items) > step:
         st.markdown(f'<div class="lst-more">{escape(tf("Showing {n} of {m}", n=len(items), m=len(items)))}</div>',
                     unsafe_allow_html=True)
+
+
+def show_grouped_list(key, items, step=15):
+    """Transactions ki list: tarikh ke hisaab se group (Today / Yesterday / date), har din ka In / Out total ke saath.
+    Har item me 'date' (YYYY-MM-DD) aur 'signed' (+ aaya, - gaya) hona chahiye."""
+    if not items:
+        return
+    nk = f"{key}_n"
+    n = st.session_state.get(nk, step)
+    totals = {}
+    for it in items:
+        d = totals.setdefault(it["date"], [0.0, 0.0])
+        d[0 if it["signed"] > 0 else 1] += abs(it["signed"])
+    today = date.today()
+    html, cur, buf = [], None, []
+
+    def flush():
+        if cur is None:
+            return
+        try:
+            dd = date.fromisoformat(cur)
+            label = t("Today") if dd == today else t("Yesterday") if dd == today - timedelta(days=1) else fdate(dd)
+        except ValueError:
+            label = cur or "—"
+        tin, tout = totals[cur]
+        html.append(
+            f'<div class="dhead"><span class="d">{escape(label)}</span><span class="t">'
+            f'{escape(t("In"))} <b class="pos">+{inr(tin)}</b> · {escape(t("Out"))} <b class="neg">−{inr(tout)}</b>'
+            f'</span></div>' + list_html(buf)
+        )
+
+    for it in items[:n]:
+        if it["date"] != cur:
+            flush()
+            cur, buf = it["date"], []
+        buf.append(it)
+    flush()
+    st.markdown("".join(html), unsafe_allow_html=True)
+    shown = min(n, len(items))
+    st.markdown(f'<div class="lst-more">{escape(tf("Showing {n} of {m}", n=shown, m=len(items)))}</div>',
+                unsafe_allow_html=True)
+    if len(items) > n:
+        st.button(t("Show more"), key=f"{key}_more", use_container_width=True,
+                  on_click=lambda: st.session_state.__setitem__(nk, n + step))
 
 
 def return_dates_section():
@@ -4810,17 +4861,18 @@ def admin_transactions():
         else:
             icon = KIND_ICONS.get(r_.Type, "•")
         inn = r_.Direction == "In"
-        bits = [t(r_.Type), str(r_.Date)]
+        bits = [t(r_.Type)]
         if r_.Mode:
             bits.append(t(r_.Mode))
         if r_.Note:
             bits.append(str(r_.Note))
         items.append({
+            "date": str(r_.Date)[:10], "signed": float(r_.Amount) if inn else -float(r_.Amount),
             "icon": icon, "tone": "g" if inn else "r", "title": r_[3] or t(r_.Type), "sub": " · ".join(bits),
             "amt": ("+" if inn else "−") + inr(r_.Amount), "amt_cls": "pos" if inn else "neg",
             "chip": t(r_.Group), "chip_cls": {"Income": "g", "Expenses": "r", "Loan payments": "y"}.get(r_.Group, "z"),
         })
-    show_list("all_txn", items, step=15)
+    show_grouped_list("all_txn", items, step=15)
     st.caption(t("To correct or delete an entry, open 'Edit records' above."))
 
 
